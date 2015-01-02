@@ -4,9 +4,10 @@ void setup() {
 }
 
 void loop() {
-  int sensorValue = analogRead(A0);
+  int level = 1024-analogRead(A0);
   static AStar32U4PrimeLCD lcd;
   lcd.clear();
-  lcd.print(1024-sensorValue);
+  lcd.print(level);
+  Serial.print(level), Serial.print(' ');
   delay(100);
 }
