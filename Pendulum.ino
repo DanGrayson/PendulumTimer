@@ -10,10 +10,10 @@ void setup() {
   // See table 14-5 on page 123 in the datasheet.  Normally WGM1
   // is initialized to 0001 by the library.  Here we initialize
   // it to 0000 to get the full 16 bit count, instead of just 8.
-  TCCR1B &= ~ (1 << WGM13);
-  TCCR1B &= ~ (1 << WGM12);
-  TCCR1A &= ~ (1 << WGM11);
-  TCCR1A &= ~ (1 << WGM10);
+  bitClear(TCCR1B,WGM13);
+  bitClear(TCCR1B,WGM12);
+  bitClear(TCCR1A,WGM11);
+  bitClear(TCCR1A,WGM10);
 }
 
 void loop() {
