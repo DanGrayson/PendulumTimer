@@ -7,22 +7,25 @@
 static AStar32U4PrimeLCD lcd;
 
 void setup() {
-  // See table 14-5 on page 123 in the datasheet.  Normally WGM1 is initialized to 0001 by the library.  Here we
-  // initialize it to 0000 to get the full 16 bit count, instead of just 8.
+  // See table 14-5 on page 123 in the datasheet.  Normally WGM1 is initialized to 0001 by the
+  // library.  Here we initialize it to 0000 to get the full 16 bit count, instead of just 8.
   bitWrite(TCCR1B,WGM13,0);
   bitWrite(TCCR1B,WGM12,0);
   bitWrite(TCCR1A,WGM11,0);
   bitWrite(TCCR1A,WGM10,0);
 
-  // See table 14-6.  Here we set the timer source to come from the I/O clock with prescaling by division by 8, which
-  // makes it tick at 1/8 of the CPU clock rate of 16 Mhz, i.e., at 2 Mhz.  It would overflow after 2^15 microseconds,
-  // which is about 32 milliseconds, or 30 times per second.
-#define DIVIDER 8
+  // See table 14-6.  Here we set the timer source to come from the I/O clock with prescaling by
+  // division by 8, which makes it tick at 1/8 of the CPU clock rate of 16 Mhz, i.e., at 2 Mhz.  It
+  // would overflow after 2^15 microseconds, which is about 32 milliseconds, or 30 times per second.
+#define TIMER1_FREQ (F_CPU/8)
   bitWrite(TCCR1B,CS12,0);
   bitWrite(TCCR1B,CS11,1);
   bitWrite(TCCR1B,CS10,0);
 
 }
+
+#define DISPLAY_FREQ 5		// per second
+#define DISPLAY_RESOLUTION 100	// per second
 
 void loop() {
   while (1) {
@@ -33,12 +36,12 @@ void loop() {
     static unsigned long ticks;
     unsigned diff = tc1 - (int)ticks;
     ticks += diff;
-    static unsigned long hsec;
-    unsigned long last_hsec = hsec;
-    hsec = ticks/(F_CPU/DIVIDER/10); // elapsed tenths of seconds
-    if (hsec/2 != last_hsec/2) {    // display 5 times per second
-      lcd.gotoXY(0,0), sprintf(buf,"%08lu",hsec), lcd.print(buf);
-      lcd.gotoXY(0,1), sprintf(buf,"%03d %4u",level,diff/2), lcd.print(buf);
+    static unsigned long display;
+    unsigned long last_display = display;
+    display = ticks/(TIMER1_FREQ/DISPLAY_FREQ);
+    if (display != last_display) {
+      lcd.gotoXY(0,0), sprintf(buf,"%08lu",ticks/(TIMER1_FREQ/DISPLAY_RESOLUTION)), lcd.print(buf);
+      lcd.gotoXY(0,1), sprintf(buf,"%03d %4u",level,diff), lcd.print(buf);
     }
   }
 }
