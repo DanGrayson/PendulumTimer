@@ -9,6 +9,7 @@ static AStar32U4PrimeLCD lcd;
 #define DISPLAY_FREQ 5		// per second
 #define DISPLAY_RESOLUTION 100	// per second
 #define TRIGGER_LEVEL 500	// 0..1023, 0 is white, 1023 is black.
+#define REFRACTORY_PERIOD 400	// milliseconds
 
 void setup() {
   // See table 14-5 on page 123 in the datasheet.  Normally WGM1 is initialized to 0001 by the
@@ -42,6 +43,8 @@ void setup() {
 
 }
 
+#define TICKS_PER_MS (TICK_FREQ/1000)
+
 void loop() {
   while (1) {
     static unsigned long tick;
@@ -51,12 +54,15 @@ void loop() {
     static unsigned aci_counter;
     static unsigned long last_aci_tick;
     if (ACSR & (1<<ACI)) {
-      aci_counter++;
       bitSet(ACSR,ACI);
       unsigned int input_capture = ICR1;
-      last_aci_tick = input_capture <= (unsigned) tick
+      unsigned long this_aci_tick = input_capture <= (unsigned) tick
 	? (((tick >> 16)  ) << 16) | input_capture
 	: (((tick >> 16)-1) << 16) | input_capture;
+      if (this_aci_tick - last_aci_tick > REFRACTORY_PERIOD * TICKS_PER_MS) {
+	aci_counter++;
+	last_aci_tick = this_aci_tick;
+      }
     }
     if (tick - last_display_tick > TICK_FREQ/DISPLAY_FREQ) {
       last_display_tick = tick;
