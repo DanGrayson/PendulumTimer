@@ -11,21 +11,27 @@ static AStar32U4PrimeLCD lcd;
 #define TRIGGER_LEVEL 500	// 0..1023, 0 is white, 1023 is black.
 #define REFRACTORY_PERIOD 400	// milliseconds
 
-void setup() {
+#define DIVISOR_CODE 2
+#define DIVISOR 8
+#define TICK_FREQ (F_CPU/DIVISOR)
+#define WGM1 0b0000
   // See table 14-5 on page 123 in the datasheet.  Normally WGM1 is initialized to 0001 by the
   // library.  Here we initialize it to 0000 to get the full 16 bit count, instead of just 8.
-  bitWrite(TCCR1B,WGM13,0);
-  bitWrite(TCCR1B,WGM12,0);
-  bitWrite(TCCR1A,WGM11,0);
-  bitWrite(TCCR1A,WGM10,0);
+
+void setup() {
+  TCCR1B =
+    (bitRead(WGM1,3) << WGM13) |
+    (bitRead(WGM1,2) << WGM12) |
+    (bitRead(DIVISOR_CODE,2) << CS12) |
+    (bitRead(DIVISOR_CODE,1) << CS11) |
+    (bitRead(DIVISOR_CODE,0) << CS10) ;
+  TCCR1A =
+    (bitRead(WGM1,1) << WGM11) |
+    (bitRead(WGM1,0) << WGM10) ;
 
   // See table 14-6.  Here we set the timer source to come from the I/O clock with prescaling by
   // division by 8, which makes it tick at 1/8 of the CPU clock rate of 16 Mhz, i.e., at 2 Mhz.  It
   // would overflow after 2^15 microseconds, which is about 32 milliseconds, or 30 times per second.
-# define TICK_FREQ (F_CPU/8)
-  bitWrite(TCCR1B,CS12,0);
-  bitWrite(TCCR1B,CS11,1);
-  bitWrite(TCCR1B,CS10,0);
 
   // Set up ADC MUX.  This will break analogRead().
   ADMUX = 0,		// ADC0 from the ADC MUX.
@@ -44,6 +50,10 @@ void setup() {
 }
 
 #define TICKS_PER_MS (TICK_FREQ/1000)
+
+static unsigned long display_tick(unsigned long tick) {
+  return tick/(TICK_FREQ/DISPLAY_RESOLUTION);
+}
 
 void loop() {
   while (1) {
@@ -68,10 +78,10 @@ void loop() {
       last_display_tick = tick;
       char buf[20];
       lcd.gotoXY(0,0),
-	sprintf(buf,"%8lu",tick/(TICK_FREQ/DISPLAY_RESOLUTION)),
+	sprintf(buf,"%8lu",display_tick(tick)),
 	lcd.print(buf);
       lcd.gotoXY(0,1),
-	sprintf(buf,"%2u %5lu",aci_counter,last_aci_tick/(TICK_FREQ/DISPLAY_RESOLUTION)),
+	sprintf(buf,"%2u %5lu",aci_counter,display_tick(last_aci_tick)),
 	lcd.print(buf);
     }
   }
