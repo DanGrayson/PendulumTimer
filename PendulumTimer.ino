@@ -1,50 +1,57 @@
 #include <AStar32U4Prime.h>
 
-  // Here we start experimenting with Timer-Counter 1, which is
-  // the one whose values can be captured when the analog
-  // comparator triggers.
-
-static AStar32U4PrimeLCD lcd;
-
 #define DISPLAY_FREQ 5		// per second
 #define DISPLAY_RESOLUTION 100	// per second
 #define TRIGGER_LEVEL 500	// 0..1023, 0 is white, 1023 is black.
 #define REFRACTORY_PERIOD 400	// milliseconds
-
-#define DIVISOR_CODE 2
 #define DIVISOR 8
+  // Here we set the timer source to come from the I/O clock with prescaling by
+  // division by 8, which makes it tick at 1/8 of the CPU clock rate of 16 Mhz,
+  // i.e., at 2 Mhz.  It would overflow after 2^15 microseconds, which is about
+  // 32 milliseconds, or 30 times per second.
+
 #define TICK_FREQ (F_CPU/DIVISOR)
+
+// see Datasheet, table 13-9 or table 14-6, Clock Select Bit Description
+#if   DIVISOR == 1
+#  define CLOCK_SELECT 1
+#elif DIVISOR == 8
+#  define CLOCK_SELECT 2
+#elif DIVISOR == 64
+#  define CLOCK_SELECT 3
+#elif DIVISOR == 256
+#  define CLOCK_SELECT 4
+#elif DIVISOR == 1024
+#  define CLOCK_SELECT 5
+#endif
+
 #define WGM1 0b0000
   // See table 14-5 on page 123 in the datasheet.  Normally WGM1 is initialized to 0001 by the
   // library.  Here we initialize it to 0000 to get the full 16 bit count, instead of just 8.
 
-void setup() {
-  TCCR1B =
-    (bitRead(WGM1,3) << WGM13) |
-    (bitRead(WGM1,2) << WGM12) |
-    (bitRead(DIVISOR_CODE,2) << CS12) |
-    (bitRead(DIVISOR_CODE,1) << CS11) |
-    (bitRead(DIVISOR_CODE,0) << CS10) ;
-  TCCR1A =
-    (bitRead(WGM1,1) << WGM11) |
-    (bitRead(WGM1,0) << WGM10) ;
+#define bitCopy(word,from,to) (bitRead(word,from) << to)
+#define bitCopy2(word,from1,to1,from2,to2) ((bitRead(word,from1) << to1) | \
+					    (bitRead(word,from2) << to2))
+#define bitCopy3(word,from1,to1,from2,to2,from3,to3) ((bitRead(word,from1) << to1) | \
+						      (bitRead(word,from2) << to2) | \
+						      (bitRead(word,from3) << to3))
+#define bit(to) (1 << to)
 
-  // See table 14-6.  Here we set the timer source to come from the I/O clock with prescaling by
-  // division by 8, which makes it tick at 1/8 of the CPU clock rate of 16 Mhz, i.e., at 2 Mhz.  It
-  // would overflow after 2^15 microseconds, which is about 32 milliseconds, or 30 times per second.
+void setup() {
+  TCCR1B = bitCopy2(WGM1,3,WGM13,2,WGM12) | bitCopy3(CLOCK_SELECT,2,CS12,1,CS11,0,CS10);
+  TCCR1A = bitCopy2(WGM1,1,WGM11,0,WGM10);
 
   // Set up ADC MUX.  This will break analogRead().
-  ADMUX = 0,		// ADC0 from the ADC MUX.
-    ADCSRA = (1<<ADATE),	// ADC Auto Trigger Enable
-    ADCSRB = (1<<ACME)		// Analog Comparator Multiplexer Enable, free running mode
-    ;
+  ADMUX = 0;			// ADC0 from the ADC MUX.
+  ADCSRA = bit(ADATE);		// ADC Auto Trigger Enable
+  ADCSRB = bit(ACME);		// Analog Comparator Multiplexer Enable, free running mode
 
   // Set up analog comparator:
-  ACSR = (1<<ACIC)		// Input Capture Enable
-    | (1<<ACBG)			// Analog Comparator Bandgap Select (pin AIN0 is already in use on
-				// the A*')
-    | (1<<ACI)			// clear the Analog Comparator Interrupt Flag
-    | ((1<<ACIS0)|(1<<ACIS1))	// Comparator Interrupt on Rising Output Edge
+  ACSR =
+      bit(ACIC)			// Input Capture Enable
+    | bit(ACBG)			// Analog Comparator Bandgap Select (pin AIN0 is already in use on the A*')
+    | bit(ACI)			// clear the Analog Comparator Interrupt Flag
+    | bit(ACIS1) | bit(ACIS0)	// Comparator Interrupt on Rising Output Edge
     ;
 
 }
@@ -63,7 +70,7 @@ void loop() {
     static unsigned long last_display_tick;
     static unsigned aci_counter;
     static unsigned long last_aci_tick;
-    if (ACSR & (1<<ACI)) {
+    if (ACSR & bit(ACI)) {
       bitSet(ACSR,ACI);
       unsigned int input_capture = ICR1;
       unsigned long this_aci_tick = input_capture <= (unsigned) tick
@@ -75,6 +82,7 @@ void loop() {
       }
     }
     if (tick - last_display_tick > TICK_FREQ/DISPLAY_FREQ) {
+      static AStar32U4PrimeLCD lcd;
       last_display_tick = tick;
       char buf[20];
       lcd.gotoXY(0,0),
