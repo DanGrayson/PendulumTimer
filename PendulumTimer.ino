@@ -18,7 +18,7 @@
   // i.e., at 2 Mhz.  It would overflow after 2^15 microseconds, which is about
   // 33 milliseconds, or 30 times per second.
 
-#define TICK_FREQ (F_CPU/DIVISOR)
+#define TIMER_FREQ (F_CPU/DIVISOR)
 
 // see Datasheet, table 13-9 or table 14-6, Clock Select Bit Description
 #if   DIVISOR == 1
@@ -60,11 +60,11 @@ void setup() {
     bit(ACIS1) | bit(ACIS0);	//   Comparator Interrupt on Rising Output Edge
 }
 
-#define TICKS_PER_MS (TICK_FREQ/1000)
-#define TICKS_PER_HOUR (60L*60L*TICK_FREQ)
+#define TICKS_PER_MS (TIMER_FREQ/1000)
+#define TICKS_PER_HOUR (60L*60L*TIMER_FREQ)
 
 static unsigned long display_timer(unsigned long timer) {
-  return timer/(TICK_FREQ/DISPLAY_RESOLUTION);
+  return timer/(TIMER_FREQ/DISPLAY_RESOLUTION);
 }
 
 void loop() {
@@ -72,9 +72,8 @@ void loop() {
     static unsigned long timer;
     unsigned diff = TCNT1 - (unsigned)timer;
     timer += diff;
-    static unsigned int aci_counter;
-    static unsigned long first_tick_time, previous_tick_time;
-    static bool had_timer;
+    static unsigned int tick_counter;
+    static unsigned long first_tick_time, second_tick_time, previous_tick_time, previous_odd_tick_time, previous_even_tick_time;
     if (ACSR & bit(ACI)) {
       bitSet(ACSR,ACI);
       unsigned int input_capture = ICR1;
@@ -83,28 +82,45 @@ void loop() {
 	: (((timer >> 16)-1) << 16) | input_capture;
       unsigned long diff_timer = this_tick_time - previous_tick_time;
       if (diff_timer > RESTART_PERIOD * TICKS_PER_MS) {
-	aci_counter = 1;
-	first_tick_time = previous_tick_time = this_tick_time;
-	had_timer = TRUE;
+	// reinitialize if we miss a tick
+	tick_counter = 0;
+	first_tick_time = previous_tick_time = previous_odd_tick_time = previous_even_tick_time = 0;
       }
-      else if (diff_timer > REFRACTORY_PERIOD * TICKS_PER_MS) {
-	aci_counter++;
+      if (diff_timer > REFRACTORY_PERIOD * TICKS_PER_MS) {
+	tick_counter++;
 	previous_tick_time = this_tick_time;
-	if (!had_timer) had_timer = TRUE, first_tick_time = this_tick_time;
+	if (tick_counter == 1) first_tick_time = this_tick_time;
+	else if (tick_counter == 2) second_tick_time = this_tick_time;
+	if (tick_counter & 2) previous_odd_tick_time = this_tick_time;
+	else previous_even_tick_time = this_tick_time;
       }
     }
     static unsigned long previous_display_time;
-    if (timer - previous_display_time > TICK_FREQ/DISPLAY_FREQ) {
+    if (timer - previous_display_time > TIMER_FREQ/DISPLAY_FREQ) {
       static AStar32U4PrimeLCD lcd;
       previous_display_time = timer;
-      unsigned long ticks_per_hour_times_10 =
-	aci_counter > 1 ? 60.*60.*1000.*100./((float)(previous_tick_time-first_tick_time)/(aci_counter-1)/TICKS_PER_MS) : 0.;
+      unsigned long tick_rate = // in ticks per hundred hours
+	tick_counter >= 4
+	? 60.			// minutes per hour
+	* 60.			// seconds per minute
+	* TIMER_FREQ		// timer counts per second
+	* 100.			// number of hours
+	/ (
+	   // The pendulum swings back and forth, so we expect the even ticks to be evenly spaced and we expect the odd
+	   // ticks to be evenly spaced.  Since the sensor is not in the exact center, we don't expect all the ticks to
+	   // be evenly spaced.  Here we average the average spacing between even ticks with the average spacing
+	   // between odd ticks.  This formula starts working with the 4th tick.
+	   (float)((previous_odd_tick_time-first_tick_time)/((tick_counter-1)/2) +
+		   (previous_even_tick_time-second_tick_time)/((tick_counter-2)/2))/2
+	   / 2			// the spacing between odd ticks (or even ticks) is twice the tick rate, so divide by 2
+	   )
+	: 0.;
       char buf[20];
       lcd.gotoXY(0,0),
-	sprintf(buf,"%8u",aci_counter),
+	sprintf(buf,"%8u",tick_counter),
 	lcd.print(buf);
       lcd.gotoXY(0,1),
-	sprintf(buf,"%5lu.%02lu",ticks_per_hour_times_10/100,ticks_per_hour_times_10%100),
+	sprintf(buf,"%5lu.%02lu",tick_rate/100,tick_rate%100), // print the rate in the form of ticks per hour, as a decimal fraction
 	lcd.print(buf);
     }
   }
