@@ -7,11 +7,11 @@
 						      (bitRead(word,from2) << to2) | \
 						      (bitRead(word,from3) << to3))
 
-#define DISPLAY_FREQ 5		// per second
+#define MAX_DISPLAY_FREQ 5		// per second
 #define DISPLAY_RESOLUTION 100	// per second
 #define TRIGGER_LEVEL 500	// 0..1023, 0 is white, 1023 is black.
-#define REFRACTORY_PERIOD 700	// milliseconds
-#define RESTART_PERIOD 1300 	// milliseconds
+#define REFRACTORY_PERIOD (385-100) // milliseconds
+#define RESTART_PERIOD    (385+100) // milliseconds
 #define DIVISOR 8
   // Here we set the timer source to come from the I/O clock with prescaling by
   // division by 8, which makes it tick at 1/8 of the CPU clock rate of 16 Mhz,
@@ -72,7 +72,7 @@ void loop() {
     static unsigned long timer;
     unsigned diff = TCNT1 - (unsigned)timer;
     timer += diff;
-    static unsigned int tick_counter;
+    static unsigned int tick_counter, tick_displayed;
     static unsigned long first_tick_time, second_tick_time, previous_tick_time, previous_odd_tick_time, previous_even_tick_time;
     if (ACSR & bit(ACI)) {
       bitSet(ACSR,ACI);
@@ -83,20 +83,22 @@ void loop() {
       unsigned long diff_timer = this_tick_time - previous_tick_time;
       if (diff_timer > RESTART_PERIOD * TICKS_PER_MS) {
 	// reinitialize if we miss a tick
-	tick_counter = 0;
-	first_tick_time = previous_tick_time = previous_odd_tick_time = previous_even_tick_time = 0;
+	tick_displayed = tick_counter =
+	  first_tick_time = previous_tick_time =
+	  previous_odd_tick_time = previous_even_tick_time = 0;
       }
       if (diff_timer > REFRACTORY_PERIOD * TICKS_PER_MS) {
 	tick_counter++;
 	previous_tick_time = this_tick_time;
 	if (tick_counter == 1) first_tick_time = this_tick_time;
 	else if (tick_counter == 2) second_tick_time = this_tick_time;
-	if (tick_counter & 2) previous_odd_tick_time = this_tick_time;
+	if (tick_counter & 1) previous_odd_tick_time = this_tick_time;
 	else previous_even_tick_time = this_tick_time;
       }
     }
     static unsigned long previous_display_time;
-    if (timer - previous_display_time > TIMER_FREQ/DISPLAY_FREQ) {
+    if (tick_counter == 0 || tick_counter != tick_displayed && timer - previous_display_time > TIMER_FREQ/MAX_DISPLAY_FREQ) {
+      tick_displayed = tick_counter;
       static AStar32U4PrimeLCD lcd;
       previous_display_time = timer;
       unsigned long tick_rate = // in ticks per hundred hours
@@ -110,8 +112,8 @@ void loop() {
 	   // ticks to be evenly spaced.  Since the sensor is not in the exact center, we don't expect all the ticks to
 	   // be evenly spaced.  Here we average the average spacing between even ticks with the average spacing
 	   // between odd ticks.  This formula starts working with the 4th tick.
-	   (float)((previous_odd_tick_time-first_tick_time)/((tick_counter-1)/2) +
-		   (previous_even_tick_time-second_tick_time)/((tick_counter-2)/2))/2
+	   ((float)(previous_odd_tick_time-first_tick_time)/((tick_counter-1)/2) +
+	    (float)(previous_even_tick_time-second_tick_time)/((tick_counter-2)/2))/2
 	   / 2			// the spacing between odd ticks (or even ticks) is twice the tick rate, so divide by 2
 	   )
 	: 0.;
