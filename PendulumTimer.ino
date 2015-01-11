@@ -1,5 +1,37 @@
 #include <AStar32U4Prime.h>
 
+class AStar32U4PrimeLCD_remapped : public PololuHD44780Base
+{
+    static const uint8_t rs = 7, e = 8, db4 = 14, db5 = 17, db6 = 13, db7 = IO_D5;
+    void sendNibble(uint8_t data) {
+        FastGPIO::Pin<db4>::setOutput(data >> 0 & 1);
+        FastGPIO::Pin<db5>::setOutput(data >> 1 & 1);
+        FastGPIO::Pin<db6>::setOutput(data >> 2 & 1);
+        FastGPIO::Pin<db7>::setOutput(data >> 3 & 1);
+        FastGPIO::Pin<e>::setOutputHigh();
+        _delay_us(1);   
+        FastGPIO::Pin<e>::setOutputLow();
+        _delay_us(1);   
+    }
+public:
+    virtual void initPins() {
+        FastGPIO::Pin<e>::setOutputLow();
+    }
+    virtual void send(uint8_t data, bool rsValue, bool only4bits) {
+        SPIPause spiPause;
+        USBPause usbPause;
+        FastGPIO::PinLoan<rs> loanRS;
+        FastGPIO::PinLoan<db4> loanDB4;
+        FastGPIO::PinLoan<db5> loanDB5;
+        FastGPIO::PinLoan<db6> loanDB6;
+        FastGPIO::PinLoan<db7> loanDB7;
+        FastGPIO::Pin<rs>::setOutput(rsValue);
+        if (!only4bits) { sendNibble(data >> 4); }
+        sendNibble(data & 0x0F);
+    }
+};
+
+
 #define bitCopy(word,from,to) (bitRead(word,from) << to)
 #define bitCopy2(word,from1,to1,from2,to2) ((bitRead(word,from1) << to1) | \
 					    (bitRead(word,from2) << to2))
@@ -69,11 +101,13 @@ static unsigned long display_timer(unsigned long timer) {
 
 void loop() {
   while (1) {
+    static bool display_needed = TRUE;
     static unsigned long timer;
     unsigned diff = TCNT1 - (unsigned)timer;
     timer += diff;
-    static unsigned int tick_counter, tick_displayed;
-    static unsigned long first_tick_time, second_tick_time, previous_tick_time, previous_odd_tick_time, previous_even_tick_time;
+    static unsigned long tick_counter, tick_displayed,
+      first_tick_time, second_tick_time,
+      previous_tick_time, previous_odd_tick_time, previous_even_tick_time, reset_counter;
     if (ACSR & bit(ACI)) {
       bitSet(ACSR,ACI);
       unsigned int input_capture = ICR1;
@@ -82,13 +116,16 @@ void loop() {
 	: (((timer >> 16)-1) << 16) | input_capture;
       unsigned long diff_timer = this_tick_time - previous_tick_time;
       if (diff_timer > RESTART_PERIOD * TICKS_PER_MS) {
-	// reinitialize if we miss a tick
+	// reset if we miss a tick
+	reset_counter++;
+	display_needed = TRUE;
 	tick_displayed = tick_counter =
 	  first_tick_time = previous_tick_time =
 	  previous_odd_tick_time = previous_even_tick_time = 0;
       }
       if (diff_timer > REFRACTORY_PERIOD * TICKS_PER_MS) {
 	tick_counter++;
+	display_needed = TRUE;
 	previous_tick_time = this_tick_time;
 	if (tick_counter == 1) first_tick_time = this_tick_time;
 	else if (tick_counter == 2) second_tick_time = this_tick_time;
@@ -97,9 +134,9 @@ void loop() {
       }
     }
     static unsigned long previous_display_time;
-    if (tick_counter == 0 || tick_counter != tick_displayed && timer - previous_display_time > TIMER_FREQ/MAX_DISPLAY_FREQ) {
+    if (display_needed && timer - previous_display_time > TIMER_FREQ/MAX_DISPLAY_FREQ) {
+      display_needed = FALSE;
       tick_displayed = tick_counter;
-      static AStar32U4PrimeLCD lcd;
       previous_display_time = timer;
       unsigned long tick_rate = // in ticks per hundred hours
 	tick_counter >= 4
@@ -108,18 +145,21 @@ void loop() {
 	* TIMER_FREQ		// timer counts per second
 	* 100.			// number of hours
 	/ (
-	   // The pendulum swings back and forth, so we expect the even ticks to be evenly spaced and we expect the odd
-	   // ticks to be evenly spaced.  Since the sensor is not in the exact center, we don't expect all the ticks to
-	   // be evenly spaced.  Here we average the average spacing between even ticks with the average spacing
-	   // between odd ticks.  This formula starts working with the 4th tick.
+	   // The pendulum swings back and forth, and we assume the sensor detects it twice per
+	   // cycle, so we expect the even ticks to be evenly spaced and we expect the odd ticks to
+	   // be evenly spaced.  Since the sensor is not in the exact center, we don't expect all
+	   // the ticks to be evenly spaced.  Here we average the average spacing between even ticks
+	   // with the average spacing between odd ticks.  This formula starts working with the 4th
+	   // tick.
 	   ((float)(previous_odd_tick_time-first_tick_time)/((tick_counter-1)/2) +
 	    (float)(previous_even_tick_time-second_tick_time)/((tick_counter-2)/2))/2
 	   / 2			// the spacing between odd ticks (or even ticks) is twice the tick rate, so divide by 2
 	   )
 	: 0.;
       char buf[20];
+      static AStar32U4PrimeLCD_remapped lcd;
       lcd.gotoXY(0,0),
-	sprintf(buf,"%8u",tick_counter),
+	sprintf(buf,"%2lu.%5lu",reset_counter,tick_counter),
 	lcd.print(buf);
       lcd.gotoXY(0,1),
 	sprintf(buf,"%5lu.%02lu",tick_rate/100,tick_rate%100), // print the rate in the form of ticks per hour, as a decimal fraction
