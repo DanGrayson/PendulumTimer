@@ -3,16 +3,31 @@
 #define TRUE 1
 #define FALSE 0
 
+// start user configuration section
+#define REMAP_RS_TO_PIN 22		// LCD:RS is usually on pin 7
+#define TICK_PERIOD 385			// my Ansonia mantle clock has 384.615 ms between ticks
+#define REFRACTORY_PERIOD (TICK_PERIOD-100)	// milliseconds after each tick to ignore new events
+#define RESTART_PERIOD    (TICK_PERIOD+100)	// milliseconds after which to declare a missed tick, so restart the count
+#define USE_BANDGAP_REF FALSE		// use the bandgap reference (1.2V) for the comparator, instead of pin AIN0 (which requires RS to be remapped)
+// end user configuration section
+
+// To remap LCD:RS to another pin requires cutting a surface mount jumper on the board and soldering a wire into the RS hole near the LCD connector.
+
+// Improvements needed:
+//   determine REFRACTORY_PERIOD and RESTART_PERIOD dynamically
+
 #define MAX_DISPLAY_FREQ 5		// per second
 #define DISPLAY_RESOLUTION 100		// per second
-#define TRIGGER_LEVEL 500		// 0..1023, 0 is white, 1023 is black.
-#define REFRACTORY_PERIOD (385-100)	// milliseconds
-#define RESTART_PERIOD    (385+100)	// milliseconds
-#define USE_BANDGAP_REF FALSE		// use the bandgap reference for the comparator, instead of pin AIN0
 
 class AStar32U4PrimeLCD_remapped : public PololuHD44780Base
 {
-  static const uint8_t rs = 22 /* was 7 */, e = 8, db4 = 14, db5 = 17, db6 = 13, db7 = IO_D5;
+  static const uint8_t rs =
+#ifdef REMAP_RS_TO_PIN
+    REMAP_RS_TO_PIN
+#else
+    7
+#endif    
+    , e = 8, db4 = 14, db5 = 17, db6 = 13, db7 = IO_D5;
   void sendNibble(uint8_t data) {
     FastGPIO::Pin<db4>::setOutput(data >> 0 & 1);
     FastGPIO::Pin<db5>::setOutput(data >> 1 & 1);
@@ -123,31 +138,28 @@ int analogueRead(uint8_t pin) {
 #define TICKS_PER_MS (TIMER_FREQ/1000)
 #define TICKS_PER_HOUR (60L*60L*TIMER_FREQ)
 
-static unsigned long display_timer(unsigned long timer) {
-  return timer/(TIMER_FREQ/DISPLAY_RESOLUTION);
-}
+typedef uint64_t counter_t;
 
 void loop() {
+  static bool display_needed = TRUE;
+  static uint16_t reset_counter;
+  static uint32_t tick_counter;
+  static counter_t timer = TCNT1, // initialize the timer so the refractory period is in effect at the start
+    first_tick_time, second_tick_time,
+    previous_tick_time, previous_odd_tick_time, previous_even_tick_time;
   while (1) {
-    static bool display_needed = TRUE;
-    static unsigned long timer;
-    unsigned diff = TCNT1 - (unsigned)timer;
-    timer += diff;
-    static unsigned long tick_counter, tick_displayed,
-      first_tick_time, second_tick_time,
-      previous_tick_time, previous_odd_tick_time, previous_even_tick_time, reset_counter;
+    timer += (uint16_t)TCNT1 - (uint16_t)timer;
     if (ACSR & bit(ACI)) {
       bitSet(ACSR,ACI);
-      unsigned int input_capture = ICR1;
-      unsigned long this_tick_time = input_capture <= (unsigned int) timer
+      uint16_t input_capture = ICR1;
+      counter_t this_tick_time = input_capture <= (uint16_t) timer
 	? (((timer >> 16)  ) << 16) | input_capture
 	: (((timer >> 16)-1) << 16) | input_capture;
-      unsigned long diff_timer = this_tick_time - previous_tick_time;
+      counter_t diff_timer = this_tick_time - previous_tick_time;
       if (diff_timer > RESTART_PERIOD * TICKS_PER_MS) {
-	// reset if we miss a tick
 	reset_counter++;
 	display_needed = TRUE;
-	tick_displayed = tick_counter =
+	tick_counter =
 	  first_tick_time = previous_tick_time =
 	  previous_odd_tick_time = previous_even_tick_time = 0;
       }
@@ -161,12 +173,11 @@ void loop() {
 	else previous_even_tick_time = this_tick_time;
       }
     }
-    static unsigned long previous_display_time;
+    static counter_t previous_display_time;
     if (display_needed && timer - previous_display_time > TIMER_FREQ/MAX_DISPLAY_FREQ) {
       display_needed = FALSE;
-      tick_displayed = tick_counter;
       previous_display_time = timer;
-      unsigned long tick_rate = // in ticks per hundred hours
+      uint32_t tick_rate = // in ticks per hundred hours
 	tick_counter >= 4
 	? 60.			// minutes per hour
 	* 60.			// seconds per minute
@@ -186,7 +197,7 @@ void loop() {
 	: 0.;
       char buf[20];
       lcd.gotoXY(0,0),
-	sprintf(buf,"%2lu:%5lu",reset_counter,tick_counter),
+	sprintf(buf,"%2u:%5lu",reset_counter,tick_counter),
 	lcd.print(buf);
       lcd.gotoXY(0,1),
 	// sprintf(buf,"%4u",analogueRead(A5));
