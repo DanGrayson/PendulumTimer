@@ -5,6 +5,8 @@
 // be evenly spaced.  Since the sensor is not in the exact center, we don't expect all
 // the ticks to be evenly spaced.
 
+// We display several parameters on the LCD, scroll to them with the B and C buttons.
+
 #include <AStar32U4Prime.h>
 
 #define TRUE 1
@@ -23,7 +25,7 @@
 #define MINUTE (SECONDS_PER_MINUTE*SECOND)
 #define HOUR (MINUTES_PER_HOUR*(uint64_t)MINUTE)
 
-#define rounded_quotient(x,y) ((x+y/2)/y)
+#define rquot(x,y) ((x+y/2)/y)	// rounded integer quotient
 
 // start user configuration section
 #define USE_BANDGAP_REF FALSE // use the bandgap reference (1.2V) for the comparator, instead of pin AIN0 (which requires RS to be remapped)
@@ -32,9 +34,9 @@
 // end user configuration section
 
 #ifdef TICKS_PER_MINUTE
-#define TICK_PERIOD rounded_quotient(MINUTE,TICKS_PER_MINUTE)
+#define TICK_PERIOD rquot(MINUTE,TICKS_PER_MINUTE)
 #else
-#define TICK_PERIOD rounded_quotient(HOUR,TICKS_PER_HOUR)
+#define TICK_PERIOD rquot(HOUR,TICKS_PER_HOUR)
 #endif
 #define TICKS_PER_CYCLE 2
 #define CYCLE (TICKS_PER_CYCLE*TICK_PERIOD)
@@ -160,55 +162,94 @@ int analogueRead(uint8_t pin) {
 #define SKIP_TICKS 2		// Ignoring the first event is a good idea, since it may not correspond to the
 				// leading edge of the pendulum rod.  Ignoring one other event seems also to help.
 
+class AStar32U4PrimeButtonA buttonA;
+class AStar32U4PrimeButtonB buttonB;
+class AStar32U4PrimeButtonC buttonC;
+
 void loop() {
   static uint16_t reset_counter;
-  uint32_t tick_counter = 0, cycle_counter = 0;
-  counter_t
-    cycle_sum = 0,		    // sum of the cycle timings (a cycle is two ticks, or one complete pendulum cycle)
-    cycle_square_sum = 0,	    // sum of the squares of the cycle timings, shifted right by PREC bits
-    last_tick_time[2] = {0,0};	    // last_tick_time[0] is the previous tick time, and
+  while (TRUE) {
+    uint32_t tick_counter = 0, cycle_counter = 0;
+    bool display_needed = TRUE;
+    counter_t
+      cycle_sum = 0,		    // sum of the cycle timings (a cycle is two ticks, or one complete pendulum cycle)
+      cycle_square_sum = 0,	    // sum of the squares of the cycle timings, shifted right by PREC bits
+      last_tick_time[2] = {0,0};    // last_tick_time[0] is the previous tick time, and
 				    // last_tick_time[1] is the one before that
-  char buf[20];
-  lcd.gotoXY(0,0), lcd.print("waiting ");
-  lcd.gotoXY(0,1), sprintf(buf,"reset %2u",reset_counter), lcd.print(buf);
-  bitSet(ACSR,ACI);		// clear comparator event flag initially, to ignore some possible noise
-  while (1) {
-    update_timer();
-    if (ACSR & bit(ACI)) {
-      bitSet(ACSR,ACI);		// clear comparator event flag
-      uint16_t input_capture = ICR1;
-      counter_t this_tick_time = ((input_capture <= (uint16_t) timer ? (timer >> 16) : ((timer >> 16) - 1)) << 16) | input_capture;
-      if (tick_counter == 0) {
-	tick_counter++;
-	last_tick_time[0] = this_tick_time;
-      }
-      else {
-	counter_t this_tick_length = this_tick_time - last_tick_time[0];
-	if (this_tick_length > 250 * MILLISECOND) { // allow entire pendulum rod to pass by, and ignore noisy nearby events
+    char buf[20];
+    bitSet(ACSR,ACI);		// clear comparator event flag initially, to ignore some possible noise
+    while (TRUE) {
+      update_timer();
+      if (ACSR & bit(ACI)) {
+	bitSet(ACSR,ACI);		// clear comparator event flag
+	uint16_t input_capture = ICR1;
+	counter_t this_tick_time = ((input_capture <= (uint16_t) timer ? (timer >> 16) : ((timer >> 16) - 1)) << 16) | input_capture;
+	if (tick_counter == 0) {
 	  tick_counter++;
-	  if (tick_counter > 2 + SKIP_TICKS) {
-	    counter_t this_cycle_length = this_tick_time - last_tick_time[1];
-	    if (this_cycle_length < CYCLE - TOLERANCE || this_cycle_length > CYCLE + TOLERANCE) break;
-	    cycle_counter++;
-	    cycle_sum += this_cycle_length;
-	    cycle_square_sum += (this_cycle_length * this_cycle_length) >> PREC;
-	  }
-	  last_tick_time[1] = last_tick_time[0];
 	  last_tick_time[0] = this_tick_time;
-	  uint32_t tick_rate =	// ticks per hundred hours
-	    cycle_counter > 0
-	    ? (100 * HOUR * TICKS_PER_CYCLE) / (rounded_quotient(cycle_sum,cycle_counter))
-	    : 0;
-	  lcd.gotoXY(0,0),
-	    sprintf(buf,"%2u:%5lu",reset_counter,tick_counter),
-	    lcd.print(buf);
-	  lcd.gotoXY(0,1),
-	    // sprintf(buf,"%4u",analogueRead(A5));
-	    sprintf(buf,"%5lu.%02lu",tick_rate/100,tick_rate%100), // ticks per hour
-	    lcd.print(buf);
+	}
+	else {
+	  counter_t this_tick_length = this_tick_time - last_tick_time[0];
+	  if (this_tick_length > 250 * MILLISECOND) { // allow entire pendulum rod to pass by, and ignore noisy nearby events
+	    tick_counter++;
+	    if (tick_counter > 2 + SKIP_TICKS) {
+	      counter_t this_cycle_length = this_tick_time - last_tick_time[1];
+	      if (this_cycle_length < CYCLE - TOLERANCE || this_cycle_length > CYCLE + TOLERANCE) break;
+	      cycle_counter++;
+	      cycle_sum += this_cycle_length;
+	      cycle_square_sum += (this_cycle_length * this_cycle_length) >> PREC;
+	    }
+	    last_tick_time[1] = last_tick_time[0];
+	    last_tick_time[0] = this_tick_time;
+	    display_needed = TRUE;
+	  }
+	}
+      }
+      static uint8_t looper;
+      looper++;
+      const int num_screens = 5;
+      static uint8_t current_screen = 1;
+      if (looper == 33 && buttonB.getSingleDebouncedPress()) current_screen = (current_screen+num_screens-1)%num_screens, display_needed = TRUE;
+      if (looper == 99 && buttonC.getSingleDebouncedPress()) current_screen = (current_screen            +1)%num_screens, display_needed = TRUE;
+      if (display_needed) {
+	display_needed = FALSE;
+	switch (current_screen) {
+	  case 0: {
+	    lcd.gotoXY(0,0), lcd.print("tick/hr ");
+	    uint32_t tick_rate = cycle_counter > 0 ? rquot(100*HOUR*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
+	    lcd.gotoXY(0,1), sprintf(buf,"%5lu.%02lu",tick_rate/100,tick_rate%100), lcd.print(buf);
+	    break;
+	  }
+	  case 1: {
+	    lcd.gotoXY(0,0), lcd.print("tick/min");
+	    uint32_t tick_rate = cycle_counter > 0 ? rquot(1000*(uint64_t)MINUTE*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
+	    lcd.gotoXY(0,1), sprintf(buf,"%4lu.%03lu",tick_rate/1000,tick_rate%1000), lcd.print(buf);
+	    break;
+	  }
+	  case 2: {
+	    lcd.gotoXY(0,0), lcd.print("tick(ms)");
+	    uint32_t tick_time = cycle_counter > 0 ? rquot(1000 * cycle_sum,( cycle_counter*(uint64_t)MILLISECOND*TICKS_PER_CYCLE )) : 0;
+	    lcd.gotoXY(0,1), sprintf(buf,"%4lu.%03lu",tick_time/1000,tick_time%1000), lcd.print(buf);
+	    break;
+	  }
+	  case 3: {
+	    lcd.gotoXY(0,0), lcd.print("tick #  ");
+	    lcd.gotoXY(0,1), sprintf(buf,"%8lu",tick_counter), lcd.print(buf);
+	    break;
+	  }
+	  case 4: {
+	    lcd.gotoXY(0,0), lcd.print("reset #  ");
+	    lcd.gotoXY(0,1), sprintf(buf,"%8u",reset_counter), lcd.print(buf);
+	    break;
+	  }
+	  default: {
+	    lcd.gotoXY(0,0), lcd.print("?       ");
+	    lcd.gotoXY(0,1), lcd.print("        ");
+	    break;
+	  }
 	}
       }
     }
+    reset_counter++;
   }
-  reset_counter++;
 }
