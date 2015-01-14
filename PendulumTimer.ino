@@ -25,7 +25,9 @@
 #define MINUTE (SECONDS_PER_MINUTE*SECOND)
 #define HOUR (MINUTES_PER_HOUR*(uint64_t)MINUTE)
 
-#define rquot(x,y) ((x+y/2)/y)	// rounded integer quotient
+static uint64_t quot(uint64_t x,uint64_t y) {
+  return (x+y/2)/y;	// rounded integer quotient
+}
 
 // start user configuration section
 #define USE_BANDGAP_REF FALSE // use the bandgap reference (1.2V) for the comparator, instead of pin AIN0 (which requires RS to be remapped)
@@ -34,9 +36,9 @@
 // end user configuration section
 
 #ifdef TICKS_PER_MINUTE
-#define TICK_PERIOD rquot(MINUTE,TICKS_PER_MINUTE)
+#define TICK_PERIOD quot(MINUTE,TICKS_PER_MINUTE)
 #else
-#define TICK_PERIOD rquot(HOUR,TICKS_PER_HOUR)
+#define TICK_PERIOD quot(HOUR,TICKS_PER_HOUR)
 #endif
 #define TICKS_PER_CYCLE 2
 #define CYCLE (TICKS_PER_CYCLE*TICK_PERIOD)
@@ -158,13 +160,33 @@ int analogueRead(uint8_t pin) {
   return n;
 }
 
-#define PREC 10
+#define PREC 10		    // should be even
 #define SKIP_TICKS 2		// Ignoring the first event is a good idea, since it may not correspond to the
 				// leading edge of the pendulum rod.  Ignoring one other event seems also to help.
 
 class AStar32U4PrimeButtonA buttonA;
 class AStar32U4PrimeButtonB buttonB;
 class AStar32U4PrimeButtonC buttonC;
+
+static uint64_t square_prec(uint64_t n) {
+  n >>= PREC/2;
+  return n*n;
+}
+
+static uint32_t sqrt64(uint64_t x) {
+  // adapted from http://freaknet.org/martin/tape/gos/misc/personal/msc/sqrt/sqrt.c
+  // Square root by abacus algorithm, Martin Guy @ UKC, June 1985.
+  // From a book on programming abaci by Mr C. Woo.
+  uint64_t p = 1LL << (64-2);
+  uint32_t res = 0;
+  while (p > x) p >>= 2;
+  while (p) {
+    if (x >= res + p) x -= res + p, res += 2 * p;
+    res >>= 1;
+    p >>= 2;
+  }
+  return res;
+}
 
 void loop() {
   static uint16_t reset_counter;
@@ -197,7 +219,7 @@ void loop() {
 	      if (this_cycle_length < CYCLE - TOLERANCE || this_cycle_length > CYCLE + TOLERANCE) break;
 	      cycle_counter++;
 	      cycle_sum += this_cycle_length;
-	      cycle_square_sum += (this_cycle_length * this_cycle_length) >> PREC;
+	      cycle_square_sum += square_prec(this_cycle_length);
 	    }
 	    last_tick_time[1] = last_tick_time[0];
 	    last_tick_time[0] = this_tick_time;
@@ -207,7 +229,7 @@ void loop() {
       }
       static uint8_t looper;
       looper++;
-      const int num_screens = 5;
+      const int num_screens = 6;
       static uint8_t current_screen = 1;
       if (looper == 33 && buttonB.getSingleDebouncedPress()) current_screen = (current_screen+num_screens-1)%num_screens, display_needed = TRUE;
       if (looper == 99 && buttonC.getSingleDebouncedPress()) current_screen = (current_screen            +1)%num_screens, display_needed = TRUE;
@@ -216,35 +238,43 @@ void loop() {
 	switch (current_screen) {
 	  case 0: {
 	    lcd.gotoXY(0,0), lcd.print("tick/hr ");
-	    uint32_t tick_rate = cycle_counter > 0 ? rquot(100*HOUR*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
+	    uint32_t tick_rate = cycle_counter > 0 ? quot(100*HOUR*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
 	    lcd.gotoXY(0,1), sprintf(buf,"%5lu.%02lu",tick_rate/100,tick_rate%100), lcd.print(buf);
 	    break;
 	  }
 	  case 1: {
 	    lcd.gotoXY(0,0), lcd.print("tick/min");
-	    uint32_t tick_rate = cycle_counter > 0 ? rquot(1000*(uint64_t)MINUTE*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
+	    uint32_t tick_rate = cycle_counter > 0 ? quot(1000*(uint64_t)MINUTE*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
 	    lcd.gotoXY(0,1), sprintf(buf,"%4lu.%03lu",tick_rate/1000,tick_rate%1000), lcd.print(buf);
 	    break;
 	  }
 	  case 2: {
 	    lcd.gotoXY(0,0), lcd.print("tick(ms)");
-	    uint32_t tick_time = cycle_counter > 0 ? rquot(1000 * cycle_sum,( cycle_counter*(uint64_t)MILLISECOND*TICKS_PER_CYCLE )) : 0;
+	    uint32_t tick_time = cycle_counter > 0 ? quot(1000*cycle_sum, cycle_counter*(uint64_t)MILLISECOND*TICKS_PER_CYCLE) : 0;
 	    lcd.gotoXY(0,1), sprintf(buf,"%4lu.%03lu",tick_time/1000,tick_time%1000), lcd.print(buf);
 	    break;
 	  }
 	  case 3: {
+	    lcd.gotoXY(0,0), lcd.print("sdev(ms)");
+	    if (cycle_counter > 1) {
+	      uint64_t cycle_mean = quot(cycle_sum,cycle_counter*(uint64_t)MILLISECOND);
+	      uint64_t cycle_mean_square = square_prec(cycle_mean);
+	      uint64_t cycle_square_mean = quot(cycle_square_sum,cycle_counter);
+	      uint64_t diff = cycle_square_mean - cycle_mean_square;
+	      uint32_t sdev = quot(1000 * ((uint64_t)sqrt64(diff) << (PREC/2)), cycle_counter*(uint64_t)MILLISECOND*TICKS_PER_CYCLE);
+	      lcd.gotoXY(0,1), sprintf(buf,"%4lu.%03lu",sdev/1000,sdev%1000), lcd.print(buf);
+	    }
+	    else lcd.gotoXY(0,1), sprintf(buf,"        "), lcd.print(buf);
+	    break;
+	  }
+	  case 4: {
 	    lcd.gotoXY(0,0), lcd.print("tick #  ");
 	    lcd.gotoXY(0,1), sprintf(buf,"%8lu",tick_counter), lcd.print(buf);
 	    break;
 	  }
-	  case 4: {
+	  case 5: {
 	    lcd.gotoXY(0,0), lcd.print("reset #  ");
 	    lcd.gotoXY(0,1), sprintf(buf,"%8u",reset_counter), lcd.print(buf);
-	    break;
-	  }
-	  default: {
-	    lcd.gotoXY(0,0), lcd.print("?       ");
-	    lcd.gotoXY(0,1), lcd.print("        ");
 	    break;
 	  }
 	}
