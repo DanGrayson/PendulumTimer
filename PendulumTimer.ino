@@ -144,7 +144,10 @@ static void ac_setup() {
     bit(ACBG) |			//   Analog Comparator Bandgap Select (pin 7 is in use for AIN0 to the CPU and for RS to the LCD, but RS can be remapped)
 #endif
     bit(ACI) |			//   clear the Analog Comparator Interrupt Flag
-    bit(ACIS1) | bit(ACIS0);	//   Comparator Interrupt on Rising Output Edge
+    bit(ACIS1);			//   Comparator Interrupt on Falling Output Edge (could be important: this way we get
+				//   the leading edge of the pendulum rod, for as the brightness increases,
+				//   the voltage decreases.  If we try to detect the trailing edge we may
+				//   occasionally be deceived by noise as the leading edge passes by.)
 }
 
 void setup() {
