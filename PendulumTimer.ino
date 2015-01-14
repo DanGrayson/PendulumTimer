@@ -42,7 +42,7 @@ static uint64_t quot(uint64_t x,uint64_t y) {
 #endif
 #define TICKS_PER_CYCLE 2
 #define CYCLE (TICKS_PER_CYCLE*TICK_PERIOD)
-#define TOLERANCE (50*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
+#define TOLERANCE (100*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
 
 // To remap LCD:RS to another pin requires cutting a surface mount jumper on the board and soldering a wire into the RS hole near the LCD connector.
 #ifndef LCD_RS_PIN
@@ -192,6 +192,28 @@ static uint32_t sqrt64(uint64_t x) {
   return res;
 }
 
+static int32_t abs32(int32_t x) {
+  return x<0 ? -x : x;
+}
+
+static void row0(const char *p) {
+  char buf[20];
+  sprintf(buf,"%-8s",p);	// the LCD displays 8 characters per row
+  lcd.gotoXY(0,0), lcd.print(buf);
+}
+
+static void blank_row1() {
+  lcd.print("      --");
+}
+
+static void display_millis_time(uint64_t x, uint64_t y) {
+  lcd.gotoXY(0,1);
+  if (y == 0) blank_row1();
+  else {
+    char buf[20];
+    uint32_t r = quot(x*100, y*MILLISECOND);
+    sprintf(buf,"%3lu.%02lums",r/100,r%100), lcd.print(buf); } }
+
 void loop() {
   static uint16_t reset_counter;
   while (TRUE) {
@@ -200,6 +222,8 @@ void loop() {
     uint16_t time_hour = 0;
     uint8_t time_minute = 0, time_second = 0;
     uint32_t time_counter = 0;
+    uint32_t deviation = 0,
+      max_deviation = 0;    // maximum deviation of cycle length from expected cycle length
     counter_t
       cycle_sum = 0,		    // sum of the cycle timings (a cycle is two ticks, or one complete pendulum cycle)
       cycle_square_sum = 0,	    // sum of the squares of the cycle timings, shifted right by PREC bits
@@ -222,28 +246,32 @@ void loop() {
 	if (tick_counter == 0) {
 	  tick_counter++;
 	  last_tick_time[0] = this_tick_time;
-	}
+	  display_needed = TRUE; }
 	else {
 	  counter_t this_tick_length = this_tick_time - last_tick_time[0];
-	  if (this_tick_length > 250 * MILLISECOND) { // allow entire pendulum rod to pass by, and ignore noisy nearby events
+	  if (this_tick_length < 250 * MILLISECOND) continue; // allow entire pendulum rod to pass by, and ignore noisy nearby events
+	  if (tick_counter == 1) {
 	    tick_counter++;
-	    if (tick_counter > 2 + SKIP_TICKS) {
-	      counter_t this_cycle_length = this_tick_time - last_tick_time[1];
-	      if (this_cycle_length < CYCLE - TOLERANCE) continue;
-	      if (this_cycle_length > CYCLE + TOLERANCE) break;
-	      cycle_counter++;
-	      cycle_sum += this_cycle_length;
-	      cycle_square_sum += square_prec(this_cycle_length);
-	    }
+	    last_tick_time[1] = last_tick_time[0];
+	    last_tick_time[0] = this_tick_time;
+	    display_needed = TRUE; }
+	  else {
+	    counter_t this_cycle_length = this_tick_time - last_tick_time[1];
+	    if (this_cycle_length < CYCLE - TOLERANCE) continue; // ignore spurious events
+	    if (this_cycle_length > CYCLE + TOLERANCE) break; // restart if no tick occurs during the predicted period
+	    tick_counter++;				   // count the tick
 	    last_tick_time[1] = last_tick_time[0];
 	    last_tick_time[0] = this_tick_time;
 	    display_needed = TRUE;
-	  }
-	}
-      }
+	    deviation = abs32(this_cycle_length - CYCLE);
+	    if (deviation > max_deviation) max_deviation = deviation;
+	    if (tick_counter > 2 + SKIP_TICKS) { // count the cycle
+	      cycle_counter++;
+	      cycle_sum += this_cycle_length;
+	      cycle_square_sum += square_prec(this_cycle_length); } } } }
       static uint8_t looper;
       looper++;
-      const int num_screens = 7;
+      const int num_screens = 9;
       static uint8_t current_screen = 1;
       if (looper == 33 && buttonB.getSingleDebouncedPress()) current_screen = (current_screen+num_screens-1)%num_screens, display_needed = TRUE;
       if (looper == 99 && buttonC.getSingleDebouncedPress()) current_screen = (current_screen            +1)%num_screens, display_needed = TRUE;
@@ -251,54 +279,48 @@ void loop() {
 	display_needed = FALSE;
 	switch (current_screen) {
 	  case 0: {
-	    lcd.gotoXY(0,0), lcd.print("tick/hr ");
+	    row0("tick/hr");
 	    uint32_t tick_rate = cycle_counter > 0 ? quot(100*HOUR*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
 	    lcd.gotoXY(0,1), sprintf(buf,"%5lu.%02lu",tick_rate/100,tick_rate%100), lcd.print(buf);
 	    break;
 	  }
 	  case 1: {
-	    lcd.gotoXY(0,0), lcd.print("tick/min");
-	    uint32_t tick_rate = cycle_counter > 0 ? quot(1000*(uint64_t)MINUTE*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
-	    lcd.gotoXY(0,1), sprintf(buf,"%4lu.%03lu",tick_rate/1000,tick_rate%1000), lcd.print(buf);
-	    break;
-	  }
+	    row0("tick/min");
+	    uint32_t tick_rate = cycle_counter > 0 ? quot(10000*(uint64_t)MINUTE*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
+	    lcd.gotoXY(0,1), sprintf(buf,"%3lu.%04lu",tick_rate/10000,tick_rate%10000), lcd.print(buf);
+	    break; }
 	  case 2: {
-	    lcd.gotoXY(0,0), lcd.print("tick(ms)");
-	    uint32_t tick_time = cycle_counter > 0 ? quot(1000*cycle_sum, cycle_counter*(uint64_t)MILLISECOND*TICKS_PER_CYCLE) : 0;
-	    lcd.gotoXY(0,1), sprintf(buf,"%4lu.%03lu",tick_time/1000,tick_time%1000), lcd.print(buf);
-	    break;
-	  }
+	    row0("tick len");
+	    display_millis_time(cycle_sum, cycle_counter*TICKS_PER_CYCLE);
+	    break; }
 	  case 3: {
-	    lcd.gotoXY(0,0), lcd.print("sdev(ms)");
-	    if (cycle_counter > 1) {
+	    row0("std dev");
+	    if (cycle_counter > 0) {
 	      uint64_t cycle_mean = quot(cycle_sum,cycle_counter*(uint64_t)MILLISECOND);
 	      uint64_t cycle_mean_square = square_prec(cycle_mean);
 	      uint64_t cycle_square_mean = quot(cycle_square_sum,cycle_counter);
 	      uint64_t diff = cycle_square_mean - cycle_mean_square;
-	      uint32_t sdev = quot(1000 * ((uint64_t)sqrt64(diff) << (PREC/2)), cycle_counter*(uint64_t)MILLISECOND*TICKS_PER_CYCLE);
-	      lcd.gotoXY(0,1), sprintf(buf,"%4lu.%03lu",sdev/1000,sdev%1000), lcd.print(buf);
-	    }
-	    else lcd.gotoXY(0,1), sprintf(buf,"        "), lcd.print(buf);
-	    break;
-	  }
+	      display_millis_time((uint64_t)sqrt64(diff) << (PREC/2), cycle_counter*TICKS_PER_CYCLE); }
+	    else blank_row1();
+	    break; }
 	  case 4: {
-	    lcd.gotoXY(0,0), lcd.print("tick #  ");
-	    lcd.gotoXY(0,1), sprintf(buf,"%8lu",tick_counter), lcd.print(buf);
-	    break;
-	  }
+	    row0("max dev");
+	    display_millis_time(max_deviation, TICKS_PER_CYCLE);
+	    break; }
 	  case 5: {
-	    lcd.gotoXY(0,0), lcd.print("time    ");
-	    lcd.gotoXY(0,1), sprintf(buf,"%02u:%02u:%02u",time_hour,time_minute,time_second), lcd.print(buf);
-	    break;
-	  }
+	    row0("prev dev");
+	    display_millis_time(deviation, TICKS_PER_CYCLE);
+	    break; }
 	  case 6: {
-	    lcd.gotoXY(0,0), lcd.print("reset #  ");
+	    row0("tick #");
+	    lcd.gotoXY(0,1), sprintf(buf,"%8lu",tick_counter), lcd.print(buf);
+	    break; }
+	  case 7: {
+	    row0("time");
+	    lcd.gotoXY(0,1), sprintf(buf,"%02u:%02u:%02u",time_hour,time_minute,time_second), lcd.print(buf);
+	    break; }
+	  case 8: {
+	    row0("reset #");
 	    lcd.gotoXY(0,1), sprintf(buf,"%8u",reset_counter), lcd.print(buf);
-	    break;
-	  }
-	}
-      }
-    }
-    reset_counter++;
-  }
-}
+	    break; } } } }
+    reset_counter++; } }
