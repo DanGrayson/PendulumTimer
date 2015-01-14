@@ -113,7 +113,11 @@ static AStar32U4PrimeLCD_remapped lcd;
 
 typedef uint64_t counter_t;
 static counter_t timer = 1L << 16; // the timer, continuously updated
-static void update_timer() { timer += (uint16_t)TCNT1 - (uint16_t)timer; }
+static uint64_t update_timer() {
+  uint16_t diff = (uint16_t)TCNT1 - (uint16_t)timer;
+  timer += diff;
+  return diff;
+}
 static void timer1_setup() {
   TCCR1A =			// Timer/Counter1 Control Register A
     bitCopy2(WGM1,1,WGM11,0,WGM10);
@@ -164,7 +168,7 @@ int analogueRead(uint8_t pin) {
 #define SKIP_TICKS 2		// Ignoring the first event is a good idea, since it may not correspond to the
 				// leading edge of the pendulum rod.  Ignoring one other event seems also to help.
 
-class AStar32U4PrimeButtonA buttonA;
+// class AStar32U4PrimeButtonA buttonA;
 class AStar32U4PrimeButtonB buttonB;
 class AStar32U4PrimeButtonC buttonC;
 
@@ -193,6 +197,9 @@ void loop() {
   while (TRUE) {
     uint32_t tick_counter = 0, cycle_counter = 0;
     bool display_needed = TRUE;
+    uint16_t time_hour = 0;
+    uint8_t time_minute = 0, time_second = 0;
+    uint32_t time_counter = 0;
     counter_t
       cycle_sum = 0,		    // sum of the cycle timings (a cycle is two ticks, or one complete pendulum cycle)
       cycle_square_sum = 0,	    // sum of the squares of the cycle timings, shifted right by PREC bits
@@ -201,7 +208,16 @@ void loop() {
     char buf[20];
     bitSet(ACSR,ACI);		// clear comparator event flag initially, to ignore some possible noise
     while (TRUE) {
-      update_timer();
+      time_counter += update_timer();
+      if (time_counter >= SECOND) {
+	time_counter -= SECOND, time_second++, display_needed = TRUE;
+	if (time_second >= SECONDS_PER_MINUTE) {
+	  time_second -= SECONDS_PER_MINUTE, time_minute++;
+	  if (time_minute >= MINUTES_PER_HOUR) {
+	    time_minute -= MINUTES_PER_HOUR, time_hour++;
+	  }
+	}
+      }
       if (ACSR & bit(ACI)) {
 	bitSet(ACSR,ACI);		// clear comparator event flag
 	uint16_t input_capture = ICR1;
@@ -229,7 +245,7 @@ void loop() {
       }
       static uint8_t looper;
       looper++;
-      const int num_screens = 6;
+      const int num_screens = 7;
       static uint8_t current_screen = 1;
       if (looper == 33 && buttonB.getSingleDebouncedPress()) current_screen = (current_screen+num_screens-1)%num_screens, display_needed = TRUE;
       if (looper == 99 && buttonC.getSingleDebouncedPress()) current_screen = (current_screen            +1)%num_screens, display_needed = TRUE;
@@ -273,6 +289,11 @@ void loop() {
 	    break;
 	  }
 	  case 5: {
+	    lcd.gotoXY(0,0), lcd.print("time    ");
+	    lcd.gotoXY(0,1), sprintf(buf,"%02u:%02u:%02u",time_hour,time_minute,time_second), lcd.print(buf);
+	    break;
+	  }
+	  case 6: {
 	    lcd.gotoXY(0,0), lcd.print("reset #  ");
 	    lcd.gotoXY(0,1), sprintf(buf,"%8u",reset_counter), lcd.print(buf);
 	    break;
