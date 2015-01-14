@@ -42,7 +42,7 @@ static uint64_t quot(uint64_t x,uint64_t y) {
 #endif
 #define TICKS_PER_CYCLE 2
 #define CYCLE (TICKS_PER_CYCLE*TICK_PERIOD)
-#define TOLERANCE (100*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
+#define TOLERANCE (50*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
 
 // To remap LCD:RS to another pin requires cutting a surface mount jumper on the board and soldering a wire into the RS hole near the LCD connector.
 #ifndef LCD_RS_PIN
@@ -209,15 +209,12 @@ void loop() {
     bitSet(ACSR,ACI);		// clear comparator event flag initially, to ignore some possible noise
     while (TRUE) {
       time_counter += update_timer();
-      if (time_counter >= SECOND) {
+      while (time_counter >= SECOND) {
 	time_counter -= SECOND, time_second++, display_needed = TRUE;
-	if (time_second >= SECONDS_PER_MINUTE) {
+	while (time_second >= SECONDS_PER_MINUTE) {
 	  time_second -= SECONDS_PER_MINUTE, time_minute++;
-	  if (time_minute >= MINUTES_PER_HOUR) {
-	    time_minute -= MINUTES_PER_HOUR, time_hour++;
-	  }
-	}
-      }
+	  while (time_minute >= MINUTES_PER_HOUR) {
+	    time_minute -= MINUTES_PER_HOUR, time_hour++; } } }
       if (ACSR & bit(ACI)) {
 	bitSet(ACSR,ACI);		// clear comparator event flag
 	uint16_t input_capture = ICR1;
@@ -232,7 +229,8 @@ void loop() {
 	    tick_counter++;
 	    if (tick_counter > 2 + SKIP_TICKS) {
 	      counter_t this_cycle_length = this_tick_time - last_tick_time[1];
-	      if (this_cycle_length < CYCLE - TOLERANCE || this_cycle_length > CYCLE + TOLERANCE) break;
+	      if (this_cycle_length < CYCLE - TOLERANCE) continue;
+	      if (this_cycle_length > CYCLE + TOLERANCE) break;
 	      cycle_counter++;
 	      cycle_sum += this_cycle_length;
 	      cycle_square_sum += square_prec(this_cycle_length);
