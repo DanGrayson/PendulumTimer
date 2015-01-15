@@ -119,6 +119,8 @@ static uint16_t time_hour;
 static uint8_t time_minute, time_second;
 static uint32_t time_counter;
 
+static uint16_t max_timer_diff;
+
 static void update_timer() {
   // uint16_t diff = (uint16_t)TCNT1 - (uint16_t)timer;
   cli();
@@ -126,6 +128,7 @@ static void update_timer() {
   uint16_t tcnt1 = (TCNT1H << 8) | low;
   sei();
   uint16_t diff = tcnt1 - (uint16_t)timer;
+  if (diff > max_timer_diff) max_timer_diff = diff;
   timer += diff;		// the lowest 16 bits of timer always agree with the recently read value of
 				// TCNT1, and the higher bits keep track of overflows
   time_counter += diff;
@@ -297,8 +300,8 @@ void loop() {
 	      cycle_square_sum += square_prec(this_cycle_length); } } } }
       static uint8_t looper;
       looper++;
-      const int num_screens = 10;
-      static uint8_t current_screen = 5;
+      const int num_screens = 11;
+      static uint8_t current_screen = 9;
       if (looper == 33 && buttonB.getSingleDebouncedPress()) current_screen = (current_screen+num_screens-1)%num_screens, display_needed = TRUE;
       if (looper == 99 && buttonC.getSingleDebouncedPress()) current_screen = (current_screen            +1)%num_screens, display_needed = TRUE;
       if (display_needed) {
@@ -350,6 +353,11 @@ void loop() {
 	    lcd.gotoXY(0,1), sprintf(buf,"%02u:%02u:%02u",time_hour,time_minute,time_second), lcd.print(buf);
 	    break; }
 	  case 9: {
+	    row0("max diff");
+	    lcd.gotoXY(0,1), sprintf(buf,"%8u",max_timer_diff), lcd.print(buf);
+	    max_timer_diff = 0;
+	    break; }
+	  case 10: {
 	    row0("reset #");
 	    lcd.gotoXY(0,1), sprintf(buf,"%8u",reset_counter), lcd.print(buf);
 	    break; } } } }
