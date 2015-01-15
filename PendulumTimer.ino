@@ -120,7 +120,12 @@ static uint8_t time_minute, time_second;
 static uint32_t time_counter;
 
 static void update_timer() {
-  uint16_t diff = (uint16_t)TCNT1 - (uint16_t)timer;
+  // uint16_t diff = (uint16_t)TCNT1 - (uint16_t)timer;
+  cli();
+  uint8_t low = TCNT1L;
+  uint16_t tcnt1 = (TCNT1H << 8) | low;
+  sei();
+  uint16_t diff = tcnt1 - (uint16_t)timer;
   timer += diff;		// the lowest 16 bits of timer always agree with the recently read value of
 				// TCNT1, and the higher bits keep track of overflows
   time_counter += diff;
@@ -171,14 +176,14 @@ void setup() {
   ac_setup();			// it's important to start the comparator after timer1 is started
 }
 
-int analogueRead(uint8_t pin) {
-  ADCSRA =				   // Analog Comparator Control and Status Register
-    bit(ADEN)				   //   ADC Enable
-    | bit(ADPS2)|bit(ADPS1)|bit(ADPS0);	   //   ADC Prescaler Select Bits (divide clock by 128), see init()
-  int n = analogRead(pin);
-  adc_setup();
-  return n;
-}
+// static int analogueRead(uint8_t pin) {
+//   ADCSRA =				   // Analog Comparator Control and Status Register
+//     bit(ADEN)				   //   ADC Enable
+//     | bit(ADPS2)|bit(ADPS1)|bit(ADPS0);	   //   ADC Prescaler Select Bits (divide clock by 128), see init()
+//   int n = analogRead(pin);
+//   adc_setup();
+//   return n;
+// }
 
 #define PREC 10		    // should be even
 #define SKIP_TICKS 2	    // Ignoring the first event is a good idea, since it may not correspond to the
@@ -208,9 +213,9 @@ static uint32_t sqrt64(uint64_t x) {
   return res;
 }
 
-static int32_t abs32(int32_t x) {
-  return x<0 ? -x : x;
-}
+// static int32_t abs32(int32_t x) {
+//   return x<0 ? -x : x;
+// }
 
 static void row0(const char *p) {
   char buf[20];
@@ -236,8 +241,9 @@ void loop() {
   static uint16_t reset_counter;
   while (TRUE) {
     uint32_t tick_counter = 0, cycle_counter = 0;
-    static uint32_t deviation;
-    uint32_t max_deviation = 0;    // maximum deviation of cycle length from expected cycle length
+    static int32_t deviation;	// deviation of cycle length from expected cycle length
+    int32_t max_deviation = 0;	// maximum deviation
+    int32_t min_deviation = 0;	// minimum deviation
     counter_t
       cycle_sum = 0,		    // sum of the cycle timings (a cycle is two ticks, or one complete pendulum cycle)
       cycle_square_sum = 0,	    // sum of the squares of the cycle timings, shifted right by PREC bits
@@ -249,15 +255,19 @@ void loop() {
       update_timer();
       if (ACSR & bit(ACI)) {
 	bitSet(ACSR,ACI);		// clear comparator event flag
-	uint16_t input_capture = ICR1;
-	update_timer();		// ensure the timer has been updated after the time of the comparator event
-				// was captured
+	// uint16_t input_capture = ICR1;
+	cli();
+	uint8_t low = ICR1L;
+	uint16_t input_capture = (ICR1H << 8) | low;
+	sei();
+	update_timer();		// ensure the timer has been updated after the capture of the time of the comparator event
 	counter_t this_tick_time = ((
 				     input_capture <= (uint16_t)timer // find out whether the timer did not
 								      // overflow after the capture
 				     ? (timer >> 16)
 				     : ((timer >> 16) - 1)
 				     ) << 16) | input_capture;
+	// now we know that this_tick_time <= timer, as it must be
 	if (tick_counter == 0) {
 	  tick_counter++;
 	  last_tick_time[0] = this_tick_time;
@@ -278,15 +288,16 @@ void loop() {
 	    last_tick_time[1] = last_tick_time[0];
 	    last_tick_time[0] = this_tick_time;
 	    display_needed = TRUE;
-	    deviation = abs32(this_cycle_length - CYCLE);
+	    deviation = this_cycle_length - CYCLE;
 	    if (deviation > max_deviation) max_deviation = deviation;
+	    if (deviation < min_deviation) min_deviation = deviation;
 	    if (tick_counter > 2 + SKIP_TICKS) { // count the cycle
 	      cycle_counter++;
 	      cycle_sum += this_cycle_length;
 	      cycle_square_sum += square_prec(this_cycle_length); } } } }
       static uint8_t looper;
       looper++;
-      const int num_screens = 9;
+      const int num_screens = 10;
       static uint8_t current_screen = 5;
       if (looper == 33 && buttonB.getSingleDebouncedPress()) current_screen = (current_screen+num_screens-1)%num_screens, display_needed = TRUE;
       if (looper == 99 && buttonC.getSingleDebouncedPress()) current_screen = (current_screen            +1)%num_screens, display_needed = TRUE;
@@ -320,22 +331,25 @@ void loop() {
 	    break; }
 	  case 4: {
 	    row0("max dev");
-	    display_millis_time(max_deviation, TICKS_PER_CYCLE);
+	    lcd.gotoXY(0,1), sprintf(buf,"%+8ld",max_deviation), lcd.print(buf);
 	    break; }
 	  case 5: {
-	    row0("prev dev");
-	    lcd.gotoXY(0,1), sprintf(buf,"%8lu",deviation), lcd.print(buf);
-	    // display_millis_time(deviation, TICKS_PER_CYCLE);
+	    row0("min dev");
+	    lcd.gotoXY(0,1), sprintf(buf,"%+8ld",min_deviation), lcd.print(buf);
 	    break; }
 	  case 6: {
+	    row0("prev dev");
+	    lcd.gotoXY(0,1), sprintf(buf,"%+8ld",deviation), lcd.print(buf);
+	    break; }
+	  case 7: {
 	    row0("tick #");
 	    lcd.gotoXY(0,1), sprintf(buf,"%8lu",tick_counter), lcd.print(buf);
 	    break; }
-	  case 7: {
+	  case 8: {
 	    row0("time");
 	    lcd.gotoXY(0,1), sprintf(buf,"%02u:%02u:%02u",time_hour,time_minute,time_second), lcd.print(buf);
 	    break; }
-	  case 8: {
+	  case 9: {
 	    row0("reset #");
 	    lcd.gotoXY(0,1), sprintf(buf,"%8u",reset_counter), lcd.print(buf);
 	    break; } } } }
