@@ -42,7 +42,7 @@ static uint64_t quot(uint64_t x,uint64_t y) {
 #endif
 #define TICKS_PER_CYCLE 2
 #define CYCLE (TICKS_PER_CYCLE*TICK_PERIOD)
-#define TOLERANCE (100*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
+#define TOLERANCE (50*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
 
 // To remap LCD:RS to another pin requires cutting a surface mount jumper on the board and soldering a wire into the RS hole near the LCD connector.
 #ifndef LCD_RS_PIN
@@ -74,7 +74,7 @@ public:
   virtual void send(uint8_t data, bool rsValue, bool only4bits) {
     SPIPause spiPause;
     USBPause usbPause;
-    FastGPIO::PinLoan<rs> loanRS;
+
     FastGPIO::PinLoan<db4> loanDB4;
     FastGPIO::PinLoan<db5> loanDB5;
     FastGPIO::PinLoan<db6> loanDB6;
@@ -115,29 +115,30 @@ static bool display_needed = TRUE;
 
 typedef uint64_t counter_t;
 static counter_t timer;		// the timer, continuously updated
-static uint16_t time_hour;
-static uint8_t time_minute, time_second;
-static uint32_t time_counter;
+static uint16_t clock_hour;
+static uint8_t clock_minute, clock_second;
+static uint32_t clock_counter;
+
+static void reset_clock() {
+  clock_hour = 0;
+  clock_minute = clock_second = 0;
+  clock_counter = 0;
+}
 
 static uint16_t max_timer_diff;
 
 static void update_timer() {
-  // uint16_t diff = (uint16_t)TCNT1 - (uint16_t)timer;
-  cli();
-  uint8_t low = TCNT1L;
-  uint16_t tcnt1 = (TCNT1H << 8) | low;
-  sei();
-  uint16_t diff = tcnt1 - (uint16_t)timer;
+  uint16_t diff = (uint16_t)TCNT1 - (uint16_t)timer;
   if (diff > max_timer_diff) max_timer_diff = diff;
   timer += diff;		// the lowest 16 bits of timer always agree with the recently read value of
 				// TCNT1, and the higher bits keep track of overflows
-  time_counter += diff;
-  while (time_counter >= SECOND) {
-    time_counter -= SECOND, time_second++, display_needed = TRUE;
-    while (time_second >= SECONDS_PER_MINUTE) {
-      time_second -= SECONDS_PER_MINUTE, time_minute++;
-      while (time_minute >= MINUTES_PER_HOUR) {
-	time_minute -= MINUTES_PER_HOUR, time_hour++; } } } }
+  clock_counter += diff;
+  while (clock_counter >= SECOND) {
+    clock_counter -= SECOND, clock_second++, display_needed = TRUE;
+    while (clock_second >= SECONDS_PER_MINUTE) {
+      clock_second -= SECONDS_PER_MINUTE, clock_minute++;
+      while (clock_minute >= MINUTES_PER_HOUR) {
+	clock_minute -= MINUTES_PER_HOUR, clock_hour++; } } } }
 
 static void timer1_setup() {
   TCCR1A =			// Timer/Counter1 Control Register A
@@ -145,7 +146,7 @@ static void timer1_setup() {
   TCCR1B =			// Timer/Counter1 Control Register B
     bitCopy2(WGM1,3,WGM13,2,WGM12) |
     bitCopy3(CLOCK_SELECT,2,CS12,1,CS11,0,CS10) ;
-  update_timer();
+  TCNT1 = 0;
 }
 
 static void adc_setup() {
@@ -179,20 +180,20 @@ void setup() {
   ac_setup();			// it's important to start the comparator after timer1 is started
 }
 
-// static int analogueRead(uint8_t pin) {
-//   ADCSRA =				   // Analog Comparator Control and Status Register
-//     bit(ADEN)				   //   ADC Enable
-//     | bit(ADPS2)|bit(ADPS1)|bit(ADPS0);	   //   ADC Prescaler Select Bits (divide clock by 128), see init()
-//   int n = analogRead(pin);
-//   adc_setup();
-//   return n;
-// }
+static int analogRead2(uint8_t pin) {
+  ADCSRA =				   // Analog Comparator Control and Status Register
+    bit(ADEN)				   //   ADC Enable
+    | bit(ADPS2)|bit(ADPS1)|bit(ADPS0);	   //   ADC Prescaler Select Bits (divide clock by 128), see init()
+  int n = analogRead(pin);
+  adc_setup();
+  return n;
+}
 
 #define PREC 10		    // should be even
 #define SKIP_TICKS 2	    // Ignoring the first event is a good idea, since it may not correspond to the
 			    // leading edge of the pendulum rod.  Ignoring one other event seems also to help.
 
-// class AStar32U4PrimeButtonA buttonA;
+class AStar32U4PrimeButtonA buttonA;
 class AStar32U4PrimeButtonB buttonB;
 class AStar32U4PrimeButtonC buttonC;
 
@@ -240,9 +241,11 @@ static void display_millis_time(uint64_t x, uint64_t y) {
     lcd.print(buf); } }
 
 void loop() {
-  // cli();			// disable interrupts, globally
   static uint16_t reset_counter;
   while (TRUE) {
+    update_timer();
+    max_timer_diff = 0;
+    reset_clock();
     uint32_t tick_counter = 0, cycle_counter = 0;
     static int32_t deviation;	// deviation of cycle length from expected cycle length
     int32_t max_deviation = 0;	// maximum deviation
@@ -258,20 +261,15 @@ void loop() {
       update_timer();
       if (ACSR & bit(ACI)) {
 	bitSet(ACSR,ACI);		// clear comparator event flag
-	// uint16_t input_capture = ICR1;
-	cli();
-	uint8_t low = ICR1L;
-	uint16_t input_capture = (ICR1H << 8) | low;
-	sei();
+	uint16_t input_capture = ICR1;
 	update_timer();		// ensure the timer has been updated after the capture of the time of the comparator event
-	counter_t this_tick_time = ((
-				     input_capture <= (uint16_t)timer // find out whether the timer did not
-								      // overflow after the capture
-				     ? (timer >> 16)
-				     : ((timer >> 16) - 1)
+	counter_t this_tick_time = ((input_capture > (uint16_t)timer // whether the timer overflowed after the capture
+				     ? ((timer >> 16) - 1)
+				     : (timer >> 16)
 				     ) << 16) | input_capture;
 	// now we know that this_tick_time <= timer, as it must be
 	if (tick_counter == 0) {
+	  max_timer_diff = 0;	// for some reason I always get a constant big timer difference, such as 16993, so ignore it
 	  tick_counter++;
 	  last_tick_time[0] = this_tick_time;
 	  display_needed = TRUE; }
@@ -282,6 +280,7 @@ void loop() {
 	    tick_counter++;
 	    last_tick_time[1] = last_tick_time[0];
 	    last_tick_time[0] = this_tick_time;
+	    reset_clock();
 	    display_needed = TRUE; }
 	  else {
 	    counter_t this_cycle_length = this_tick_time - last_tick_time[1];
@@ -300,8 +299,9 @@ void loop() {
 	      cycle_square_sum += square_prec(this_cycle_length); } } } }
       static uint8_t looper;
       looper++;
-      const int num_screens = 11;
-      static uint8_t current_screen = 9;
+      const int num_screens = 12;
+      static uint8_t current_screen = 0;
+      if (looper == 11 && buttonA.getSingleDebouncedPress()) break;
       if (looper == 33 && buttonB.getSingleDebouncedPress()) current_screen = (current_screen+num_screens-1)%num_screens, display_needed = TRUE;
       if (looper == 99 && buttonC.getSingleDebouncedPress()) current_screen = (current_screen            +1)%num_screens, display_needed = TRUE;
       if (display_needed) {
@@ -349,16 +349,21 @@ void loop() {
 	    lcd.gotoXY(0,1), sprintf(buf,"%8lu",tick_counter), lcd.print(buf);
 	    break; }
 	  case 8: {
-	    row0("time");
-	    lcd.gotoXY(0,1), sprintf(buf,"%02u:%02u:%02u",time_hour,time_minute,time_second), lcd.print(buf);
+	    row0("batch #");
+	    lcd.gotoXY(0,1), sprintf(buf,"%8u",reset_counter), lcd.print(buf);
 	    break; }
 	  case 9: {
-	    row0("max diff");
-	    lcd.gotoXY(0,1), sprintf(buf,"%8u",max_timer_diff), lcd.print(buf);
-	    max_timer_diff = 0;
+	    row0("time");
+	    lcd.gotoXY(0,1), sprintf(buf,"%02u:%02u:%02u",clock_hour,clock_minute,clock_second), lcd.print(buf);
 	    break; }
 	  case 10: {
-	    row0("reset #");
-	    lcd.gotoXY(0,1), sprintf(buf,"%8u",reset_counter), lcd.print(buf);
-	    break; } } } }
+	    row0("max diff");
+	    lcd.gotoXY(0,1), sprintf(buf,"%8u",max_timer_diff), lcd.print(buf);
+	    // max_timer_diff = 0;
+	    break; }
+	  case 11: {
+	    row0("light");
+	    lcd.gotoXY(0,1), sprintf(buf,"%8u",1024-analogRead2(A5)), lcd.print(buf);
+	    break; }
+	} } }
     reset_counter++; } }
