@@ -13,10 +13,10 @@
 #define FALSE 0
 
 #define DIVISOR 8
-  // Here we set the timer source to come from the I/O clock with prescaling by
-  // division by 8, which makes it tick at 1/8 of the CPU clock rate of 16 Mhz,
-  // i.e., at 2 Mhz.  It would overflow after 2^15 microseconds, which is about
-  // 33 milliseconds, or 30 times per second.
+// Here we set the timer source to come from the I/O clock with prescaling by
+// division by 8, which makes it tick at 1/8 of the CPU clock rate of 16 Mhz,
+// i.e., at 2 Mhz.  It would overflow after 2^15 microseconds, which is about
+// 33 milliseconds, or 30 times per second.
 #define TIMER_FREQ (F_CPU/DIVISOR)
 #define SECOND TIMER_FREQ
 #define MILLISECOND (SECOND/1000)
@@ -91,7 +91,7 @@ static AStar32U4PrimeLCD_remapped lcd;
 					    (bitRead(word,from2) << to2))
 #define bitCopy3(word,from1,to1,from2,to2,from3,to3) ((bitRead(word,from1) << to1) | \
 						      (bitRead(word,from2) << to2) | \
-						      (bitRead(word,from3) << to3))
+						       (bitRead(word,from3) << to3))
 
 // see Datasheet, table 13-9 or table 14-6, Clock Select Bit Description
 #if   DIVISOR == 1
@@ -107,8 +107,8 @@ static AStar32U4PrimeLCD_remapped lcd;
 #endif
 
 // Waveform Generation Mode;
-  // See table 14-5 on page 123 in the datasheet.  Normally WGM1 is initialized to 0001 by the
-  // library.  Here we initialize it to 0000 to get the full 16 bit count, instead of just 8.
+// See table 14-5 on page 123 in the datasheet.  Normally WGM1 is initialized to 0001 by the
+// library.  Here we initialize it to 0000 to get the full 16 bit count, instead of just 8.
 #define WGM1 0b0000
 
 static bool display_needed = TRUE;
@@ -117,12 +117,15 @@ typedef uint64_t counter_t;
 static counter_t timer;		// the timer, continuously updated
 static uint16_t clock_hour;
 static uint8_t clock_minute, clock_second;
+static uint16_t clock_millisecond;
 static uint32_t clock_counter;
 
 static void reset_clock() {
-  clock_hour = 0;
-  clock_minute = clock_second = 0;
-  clock_counter = 0;
+  clock_hour =
+    clock_minute =
+    clock_second =
+    clock_millisecond =
+    clock_counter = 0;
 }
 
 static uint16_t max_timer_diff;
@@ -133,12 +136,15 @@ static void update_timer() {
   timer += diff;		// the lowest 16 bits of timer always agree with the recently read value of
 				// TCNT1, and the higher bits keep track of overflows
   clock_counter += diff;
-  while (clock_counter >= SECOND) {
-    clock_counter -= SECOND, clock_second++, display_needed = TRUE;
-    while (clock_second >= SECONDS_PER_MINUTE) {
-      clock_second -= SECONDS_PER_MINUTE, clock_minute++;
-      while (clock_minute >= MINUTES_PER_HOUR) {
-	clock_minute -= MINUTES_PER_HOUR, clock_hour++; } } } }
+  while (clock_counter >= MILLISECOND) {
+    clock_counter -= MILLISECOND, clock_millisecond++;
+    if (clock_millisecond % 500 == 0) display_needed = TRUE; // display something every 500ms
+    while (clock_millisecond >= 1000) {
+      clock_millisecond -= 1000, clock_second++;
+      while (clock_second >= SECONDS_PER_MINUTE) {
+	clock_second -= SECONDS_PER_MINUTE, clock_minute++;
+	while (clock_minute >= MINUTES_PER_HOUR) {
+	  clock_minute -= MINUTES_PER_HOUR, clock_hour++; } } } } }
 
 static void timer1_setup() {
   TCCR1A =			// Timer/Counter1 Control Register A
@@ -178,6 +184,27 @@ void setup() {
   timer1_setup();
   adc_setup();
   ac_setup();			// it's important to start the comparator after timer1 is started
+}
+
+static int analogReadMUX(uint8_t mux) // the library code handles reading only from ADC0,...,ADC7
+{
+  // this can interfere with the detect of the pendulum, perhaps restart?
+  uint8_t saveA = ADCSRA, saveB = ADCSRB, saveMUX = ADMUX;
+  uint8_t low, high;
+  ADMUX =
+    bit(REFS0) |		// AV_CC with external capacitor on AREF pin
+    bitClear(mux,5);
+  ADCSRB =
+    bitRead(mux,5) << MUX5;
+  ADCSRA =				   // Analog Comparator Control and Status Register
+    bit(ADEN) |				   //   ADC Enable
+    bit(ADSC) |				   //   ADC Start Conversion
+    bit(ADPS2)|bit(ADPS1)|bit(ADPS0);	   //   ADC Prescaler Select Bits (divide clock by 128), see init()
+  while (bitRead(ADCSRA, ADSC));
+  low  = ADCL;
+  high = ADCH;
+  ADMUX = saveMUX, ADCSRB = saveB, ADCSRA = saveA;
+  return (high << 8) | low;
 }
 
 static int analogRead2(uint8_t pin) {
@@ -299,7 +326,7 @@ void loop() {
 	      cycle_square_sum += square_prec(this_cycle_length); } } } }
       static uint8_t looper;
       looper++;
-      const int num_screens = 12;
+      const int num_screens = 13;
       static uint8_t current_screen = 0;
       if (looper == 11 && buttonA.getSingleDebouncedPress()) break;
       if (looper == 33 && buttonB.getSingleDebouncedPress()) current_screen = (current_screen+num_screens-1)%num_screens, display_needed = TRUE;
@@ -363,7 +390,23 @@ void loop() {
 	    break; }
 	  case 11: {
 	    row0("light");
-	    lcd.gotoXY(0,1), sprintf(buf,"%8u",1024-analogRead2(A5)), lcd.print(buf);
+	    lcd.gotoXY(0,1), sprintf(buf,"%4u%4u",1024-analogReadMUX(0 /* ADC0, A5 */ ),1024-analogRead2(A5)), lcd.print(buf);
+	    break; }
+	  case 12: {
+	    static uint16_t vmin = 1023, vmax = 0;
+	    static uint8_t n;
+	    if (++n >= 2) n=0, vmin = 1023, vmax = 0;
+	    uint16_t v;
+	    uint32_t vsum = 0;
+	    uint8_t k;
+	    for (k=0;k<40;k++) {
+	      v = analogReadMUX(0b011110 /* V band gap */);
+	      vsum += v;
+	      if (v < vmin) vmin = v;
+	      if (v > vmax) vmax = v;
+	    }
+	    lcd.gotoXY(0,0), sprintf(buf,"BG  %4u",(int)quot(vsum,k)), lcd.print(buf);
+	    lcd.gotoXY(0,1), sprintf(buf,"%4u%4u",vmin,vmax), lcd.print(buf);
 	    break; }
 	} } }
     reset_counter++; } }
