@@ -207,14 +207,14 @@ static int analogReadMUX(uint8_t mux) // the library code handles reading only f
   return (high << 8) | low;
 }
 
-static int analogRead2(uint8_t pin) {
-  ADCSRA =				   // Analog Comparator Control and Status Register
-    bit(ADEN)				   //   ADC Enable
-    | bit(ADPS2)|bit(ADPS1)|bit(ADPS0);	   //   ADC Prescaler Select Bits (divide clock by 128), see init()
-  int n = analogRead(pin);
-  adc_setup();
-  return n;
-}
+// static int analogRead2(uint8_t pin) {
+//   ADCSRA =				   // Analog Comparator Control and Status Register
+//     bit(ADEN)				   //   ADC Enable
+//     | bit(ADPS2)|bit(ADPS1)|bit(ADPS0);	   //   ADC Prescaler Select Bits (divide clock by 128), see init()
+//   int n = analogRead(pin);
+//   adc_setup();
+//   return n;
+// }
 
 #define PREC 10		    // should be even
 #define SKIP_TICKS 2	    // Ignoring the first event is a good idea, since it may not correspond to the
@@ -390,7 +390,7 @@ void loop() {
 	    break; }
 	  case 11: {
 	    row0("light");
-	    lcd.gotoXY(0,1), sprintf(buf,"%4u%4u",1024-analogReadMUX(0 /* ADC0, A5 */ ),1024-analogRead2(A5)), lcd.print(buf);
+	    lcd.gotoXY(0,1), sprintf(buf,"%8u",1024-analogReadMUX(0 /* ADC0, A5 */ )), lcd.print(buf);
 	    break; }
 	  case 12: {
 	    static uint16_t vmin = 1023, vmax = 0;
