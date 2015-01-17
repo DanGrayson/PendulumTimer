@@ -25,7 +25,11 @@
 #define MINUTE (SECONDS_PER_MINUTE*SECOND)
 #define HOUR (MINUTES_PER_HOUR*(uint64_t)MINUTE)
 
-static uint64_t quot(uint64_t x,uint64_t y) {
+static uint64_t quot64(uint64_t x,uint64_t y) {
+  return (x+y/2)/y;	// rounded integer quotient
+}
+
+static uint32_t quot32(uint32_t x,uint32_t y) {
   return (x+y/2)/y;	// rounded integer quotient
 }
 
@@ -36,9 +40,9 @@ static uint64_t quot(uint64_t x,uint64_t y) {
 // end user configuration section
 
 #ifdef TICKS_PER_MINUTE
-#define TICK_PERIOD quot(MINUTE,TICKS_PER_MINUTE)
+#define TICK_PERIOD quot64(MINUTE,TICKS_PER_MINUTE)
 #else
-#define TICK_PERIOD quot(HOUR,TICKS_PER_HOUR)
+#define TICK_PERIOD quot64(HOUR,TICKS_PER_HOUR)
 #endif
 #define TICKS_PER_CYCLE 2
 #define CYCLE (TICKS_PER_CYCLE*TICK_PERIOD)
@@ -198,8 +202,10 @@ static int analogReadMUX(uint8_t mux) // the library code handles reading only f
     bitRead(mux,5) << MUX5;
   ADCSRA =				   // Analog Comparator Control and Status Register
     bit(ADEN) |				   //   ADC Enable
-    bit(ADSC) |				   //   ADC Start Conversion
     bit(ADPS2)|bit(ADPS1)|bit(ADPS0);	   //   ADC Prescaler Select Bits (divide clock by 128), see init()
+  delayMicroseconds(400);		   // let it settle (the time was determined by experiment)
+  ADCSRA = ADCSRA |	                   // Analog Comparator Control and Status Register
+    bit(ADSC);				   //   ADC Start Conversion
   while (bitRead(ADCSRA, ADSC));
   low  = ADCL;
   high = ADCH;
@@ -263,7 +269,7 @@ static void display_millis_time(uint64_t x, uint64_t y) {
   if (y == 0) blank_row1();
   else {
     char buf[20];
-    uint32_t r = quot(x*100, y*MILLISECOND);
+    uint32_t r = quot64(x*100, y*MILLISECOND);
     sprintf(buf,"%3lu.%02lums",r/100,r%100);
     lcd.print(buf); } }
 
@@ -336,13 +342,13 @@ void loop() {
 	switch (current_screen) {
 	  case 0: {
 	    row0("tick/hr");
-	    uint32_t tick_rate = cycle_counter > 0 ? quot(100*HOUR*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
+	    uint32_t tick_rate = cycle_counter > 0 ? quot64(100*HOUR*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
 	    lcd.gotoXY(0,1), sprintf(buf,"%5lu.%02lu",tick_rate/100,tick_rate%100), lcd.print(buf);
 	    break;
 	  }
 	  case 1: {
 	    row0("tick/min");
-	    uint32_t tick_rate = cycle_counter > 0 ? quot(10000*(uint64_t)MINUTE*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
+	    uint32_t tick_rate = cycle_counter > 0 ? quot64(10000*(uint64_t)MINUTE*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
 	    lcd.gotoXY(0,1), sprintf(buf,"%3lu.%04lu",tick_rate/10000,tick_rate%10000), lcd.print(buf);
 	    break; }
 	  case 2: {
@@ -352,9 +358,9 @@ void loop() {
 	  case 3: {
 	    row0("std dev");
 	    if (cycle_counter > 0) {
-	      uint64_t cycle_mean = quot(cycle_sum,cycle_counter*(uint64_t)MILLISECOND);
+	      uint64_t cycle_mean = quot64(cycle_sum,cycle_counter*(uint64_t)MILLISECOND);
 	      uint64_t cycle_mean_square = square_prec(cycle_mean);
-	      uint64_t cycle_square_mean = quot(cycle_square_sum,cycle_counter);
+	      uint64_t cycle_square_mean = quot64(cycle_square_sum,cycle_counter);
 	      uint64_t diff = cycle_square_mean - cycle_mean_square;
 	      display_millis_time((uint64_t)sqrt64(diff) << (PREC/2), cycle_counter*TICKS_PER_CYCLE); }
 	    else blank_row1();
@@ -393,20 +399,16 @@ void loop() {
 	    lcd.gotoXY(0,1), sprintf(buf,"%8u",1024-analogReadMUX(0 /* ADC0, A5 */ )), lcd.print(buf);
 	    break; }
 	  case 12: {
-	    static uint16_t vmin = 1023, vmax = 0;
+	    static uint16_t umin = 1023, umax = 0;
 	    static uint8_t n;
-	    if (++n >= 2) n=0, vmin = 1023, vmax = 0;
-	    uint16_t v;
-	    uint32_t vsum = 0;
-	    uint8_t k;
-	    for (k=0;k<40;k++) {
-	      v = analogReadMUX(0b011110 /* V band gap */);
-	      vsum += v;
-	      if (v < vmin) vmin = v;
-	      if (v > vmax) vmax = v;
-	    }
-	    lcd.gotoXY(0,0), sprintf(buf,"BG  %4u",(int)quot(vsum,k)), lcd.print(buf);
-	    lcd.gotoXY(0,1), sprintf(buf,"%4u%4u",vmin,vmax), lcd.print(buf);
+	    if (++n >= 10) n=0, umin = 1023, umax = 0;
+	    uint16_t u;
+	    u = analogReadMUX(0b011110 /* V band gap */);
+	    if (u < umin) umin = u;
+	    if (u > umax) umax = u;
+	    row0("V_CC");
+	    uint16_t v = quot32(11 * 100UL * 2048, 10 * (2*u + 1));
+	    lcd.gotoXY(0,1), sprintf(buf,"%5u.%02u",v/100,v%100), lcd.print(buf);
 	    break; }
 	} } }
     reset_counter++; } }
