@@ -7,17 +7,22 @@
 
 // We display several parameters on the LCD, scroll to them with the B and C buttons.
 
+// My A-Star's clock seems to be slow by about 2 seconds in 20 hours.  We
+// should add code to compensate for such calibration.
+
 #include <AStar32U4Prime.h>
+
+#define VERSION "0.2"
 
 #define TRUE 1
 #define FALSE 0
 
 // start user configuration section
 
-// #define TICKS_PER_MINUTE 156    // my black Ansonia mantle clock
-#define TICKS_PER_MINUTE  64       // my grandfather clock (actually seems to be 3836.65 ticks per hour (?))
+#define TICKS_PER_MINUTE 156    // my black Ansonia mantle clock
+// #define TICKS_PER_MINUTE  64       // my grandfather clock (actually seems to be 3836.25 ticks per hour)
 
-#define USE_BANDGAP_REF FALSE   // use the bandgap reference (1.2V) for the comparator, instead of pin AIN0 (which requires RS to be remapped)
+#define USE_BANDGAP_REF TRUE    // use the bandgap reference (1.2V) for the comparator, instead of pin AIN0 (which requires RS to be remapped)
 #define LCD_RS_PIN 22		// remap LCD:RS to pin 22
 
 // end user configuration section
@@ -50,7 +55,7 @@ static uint32_t quot32(uint32_t x,uint32_t y) {
 #endif
 #define TICKS_PER_CYCLE 2
 #define CYCLE (TICKS_PER_CYCLE*TICK_PERIOD)
-#define TOLERANCE (50*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
+#define TOLERANCE (10*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
 
 // To remap LCD:RS to another pin requires cutting a surface mount jumper on the board and soldering a wire into the RS hole near the LCD connector.
 #ifndef LCD_RS_PIN
@@ -227,7 +232,7 @@ static int analogReadMUX(uint8_t mux) // the library code handles reading only f
 // }
 
 #define PREC 10		    // should be even
-#define SKIP_TICKS 2	    // Ignoring the first event is a good idea, since it may not correspond to the
+#define SKIP_TICKS 5	    // Ignoring the first event is a good idea, since it may not correspond to the
 			    // leading edge of the pendulum rod.  Ignoring one other event seems also to help.
 
 class AStar32U4PrimeButtonA buttonA;
@@ -262,6 +267,12 @@ static void row0(const char *p) {
   char buf[20];
   sprintf(buf,"%-8s",p);	// the LCD displays 8 characters per row
   lcd.gotoXY(0,0), lcd.print(buf);
+}
+
+static void row1(const char *p) {
+  char buf[20];
+  sprintf(buf,"%-8s",p);	// the LCD displays 8 characters per row
+  lcd.gotoXY(0,1), lcd.print(buf);
 }
 
 static void blank_row1() {
@@ -336,7 +347,7 @@ void loop() {
 	      cycle_square_sum += square_prec(this_cycle_length); } } } }
       static uint8_t looper;
       looper++;
-      const int num_screens = 13;
+      const int num_screens = 14;
       static uint8_t current_screen = 0;
       if (looper == 11 && buttonA.getSingleDebouncedPress()) break;
       if (looper == 33 && buttonB.getSingleDebouncedPress()) current_screen = (current_screen+num_screens-1)%num_screens, display_needed = TRUE;
@@ -351,15 +362,19 @@ void loop() {
 	    break;
 	  }
 	  case 1: {
+	    row0("time");
+	    lcd.gotoXY(0,1), sprintf(buf,"%02u:%02u:%02u",clock_hour,clock_minute,clock_second), lcd.print(buf);
+	    break; }
+	  case 2: {
 	    row0("tick/min");
 	    uint32_t tick_rate = cycle_counter > 0 ? quot64(10000*(uint64_t)MINUTE*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
 	    lcd.gotoXY(0,1), sprintf(buf,"%3lu.%04lu",tick_rate/10000,tick_rate%10000), lcd.print(buf);
 	    break; }
-	  case 2: {
+	  case 3: {
 	    row0("tick len");
 	    display_millis_time(cycle_sum, cycle_counter*TICKS_PER_CYCLE);
 	    break; }
-	  case 3: {
+	  case 4: {
 	    row0("std dev");
 	    if (cycle_counter > 0) {
 	      uint64_t cycle_mean = quot64(cycle_sum,cycle_counter*(uint64_t)MILLISECOND);
@@ -369,29 +384,25 @@ void loop() {
 	      display_millis_time((uint64_t)sqrt64(diff) << (PREC/2), cycle_counter*TICKS_PER_CYCLE); }
 	    else blank_row1();
 	    break; }
-	  case 4: {
+	  case 5: {
 	    row0("max dev");
 	    lcd.gotoXY(0,1), sprintf(buf,"%+8ld",max_deviation), lcd.print(buf);
 	    break; }
-	  case 5: {
+	  case 6: {
 	    row0("min dev");
 	    lcd.gotoXY(0,1), sprintf(buf,"%+8ld",min_deviation), lcd.print(buf);
 	    break; }
-	  case 6: {
+	  case 7: {
 	    row0("prev dev");
 	    lcd.gotoXY(0,1), sprintf(buf,"%+8ld",deviation), lcd.print(buf);
 	    break; }
-	  case 7: {
+	  case 8: {
 	    row0("tick #");
 	    lcd.gotoXY(0,1), sprintf(buf,"%8lu",tick_counter), lcd.print(buf);
 	    break; }
-	  case 8: {
+	  case 9: {
 	    row0("batch #");
 	    lcd.gotoXY(0,1), sprintf(buf,"%8u",reset_counter), lcd.print(buf);
-	    break; }
-	  case 9: {
-	    row0("time");
-	    lcd.gotoXY(0,1), sprintf(buf,"%02u:%02u:%02u",clock_hour,clock_minute,clock_second), lcd.print(buf);
 	    break; }
 	  case 10: {
 	    row0("max diff");
@@ -413,6 +424,10 @@ void loop() {
 	    row0("V_CC");
 	    uint16_t v = quot32(11 * 100UL * 2048, 10 * (2*u + 1));
 	    lcd.gotoXY(0,1), sprintf(buf,"%5u.%02u",v/100,v%100), lcd.print(buf);
+	    break; }
+	  case 13: {
+	    row0("version");
+	    row1(VERSION);
 	    break; }
 	} } }
     reset_counter++; } }
