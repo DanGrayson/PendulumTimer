@@ -201,7 +201,10 @@ void setup() {
 
 static int analogReadMUX(uint8_t mux) // the library code handles reading only from ADC0,...,ADC7
 {
-  // this can interfere with the detect of the pendulum, perhaps restart?
+  // this can interfere with the detection of the pendulum, perhaps restart?
+#if 1
+  return 0;
+#else
   uint8_t saveA = ADCSRA, saveB = ADCSRB, saveMUX = ADMUX;
   uint8_t low, high;
   ADMUX =
@@ -220,16 +223,8 @@ static int analogReadMUX(uint8_t mux) // the library code handles reading only f
   high = ADCH;
   ADMUX = saveMUX, ADCSRB = saveB, ADCSRA = saveA;
   return (high << 8) | low;
+#endif
 }
-
-// static int analogRead2(uint8_t pin) {
-//   ADCSRA =				   // Analog Comparator Control and Status Register
-//     bit(ADEN)				   //   ADC Enable
-//     | bit(ADPS2)|bit(ADPS1)|bit(ADPS0);	   //   ADC Prescaler Select Bits (divide clock by 128), see init()
-//   int n = analogRead(pin);
-//   adc_setup();
-//   return n;
-// }
 
 #define PREC 10		    // should be even
 #define SKIP_TICKS 5	    // Ignoring the first event is a good idea, since it may not correspond to the
@@ -259,24 +254,22 @@ static uint32_t sqrt64(uint64_t x) {
   return res;
 }
 
-// static int32_t abs32(int32_t x) {
-//   return x<0 ? -x : x;
-// }
-
-static void row0(const char *p) {
+static void row(int r,const char *p) {
   char buf[20];
   sprintf(buf,"%-8s",p);	// the LCD displays 8 characters per row
-  lcd.gotoXY(0,0), lcd.print(buf);
+  lcd.gotoXY(0,r), lcd.print(buf);
+}
+  
+static void row0(const char *p) {
+  row(0,p);
 }
 
 static void row1(const char *p) {
-  char buf[20];
-  sprintf(buf,"%-8s",p);	// the LCD displays 8 characters per row
-  lcd.gotoXY(0,1), lcd.print(buf);
+  row(1,p);
 }
 
 static void blank_row1() {
-  lcd.print("      --");
+  row1("      --");
 }
 
 static void display_millis_time(uint64_t x, uint64_t y) {
@@ -289,11 +282,11 @@ static void display_millis_time(uint64_t x, uint64_t y) {
     lcd.print(buf); } }
 
 void loop() {
+  display_needed = TRUE;
   static uint16_t reset_counter;
   while (TRUE) {
-    update_timer();
+    update_timer(), reset_clock();
     max_timer_diff = 0;
-    reset_clock();
     uint32_t tick_counter = 0, cycle_counter = 0;
     static int32_t deviation;	// deviation of cycle length from expected cycle length
     int32_t max_deviation = 0;	// maximum deviation
@@ -422,6 +415,7 @@ void loop() {
 	    if (u < umin) umin = u;
 	    if (u > umax) umax = u;
 	    row0("V_CC");
+	    row1("");
 	    uint16_t v = quot32(11 * 100UL * 2048, 10 * (2*u + 1));
 	    lcd.gotoXY(0,1), sprintf(buf,"%5u.%02u",v/100,v%100), lcd.print(buf);
 	    break; }
