@@ -362,7 +362,7 @@ void loop() {
 	    break;
 	  }
 	  case 1: {
-	    row0("time");
+	    row0(tick_counter & 1 ? "time +" : "time  +");
 	    lcd.gotoXY(0,1), sprintf(buf,"%02u:%02u:%02u",clock_hour,clock_minute,clock_second), lcd.print(buf);
 	    break; }
 	  case 2: {
