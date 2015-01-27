@@ -19,10 +19,12 @@
 
 // start user configuration section
 
-#define TICKS_PER_MINUTE 156    // my black Ansonia mantle clock
-// #define TICKS_PER_MINUTE  64       // my grandfather clock (actually seems to be 3836.25 ticks per hour)
+// #define TICKS_PER_MINUTE 156    // my black Ansonia mantle clock
+#define TICKS_PER_MINUTE  64       // my grandfather clock (actually seems to be 3836.25 ticks per hour)
 
-#define USE_BANDGAP_REF TRUE    // use the bandgap reference (1.2V) for the comparator, instead of pin AIN0 (which requires RS to be remapped)
+#define TOLERANCE (50*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
+
+#define USE_BANDGAP_REF FALSE    // use the bandgap reference (1.2V) for the comparator, instead of pin AIN0 (which requires RS to be remapped)
 #define LCD_RS_PIN 22		// remap LCD:RS to pin 22
 
 // end user configuration section
@@ -55,7 +57,6 @@ static uint32_t quot32(uint32_t x,uint32_t y) {
 #endif
 #define TICKS_PER_CYCLE 2
 #define CYCLE (TICKS_PER_CYCLE*TICK_PERIOD)
-#define TOLERANCE (10*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
 
 // To remap LCD:RS to another pin requires cutting a surface mount jumper on the board and soldering a wire into the RS hole near the LCD connector.
 #ifndef LCD_RS_PIN
