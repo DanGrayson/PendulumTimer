@@ -11,44 +11,16 @@
 // should add code to compensate for such calibration.
 
 #include <AStar32U4Prime.h>
-
-#define VERSION "0.2"
+#include <SPI.h>
+#include <SD.h>
 
 #define TRUE 1
 #define FALSE 0
 
-// start user configuration section
-
-#define TICKS_PER_MINUTE 156    // my black Ansonia mantle clock
-// #define TICKS_PER_MINUTE  64       // my grandfather clock (actually seems to be 3836.25 ticks per hour)
-
 #define USE_BANDGAP_REF FALSE    // use the bandgap reference (1.2V) for the comparator, instead of pin AIN0 (which requires RS to be remapped)
 #define LCD_RS_PIN 22		// remap LCD:RS to pin 22
 
-// end user configuration section
-
 #define DIVISOR 8
-// Here we set the timer source to come from the I/O clock with prescaling by
-// division by 8, which makes it tick at 1/8 of the CPU clock rate of 16 Mhz,
-// i.e., at 2 Mhz.  It would overflow after 2^15 microseconds, which is about
-// 33 milliseconds, or 30 times per second.
-#define TIMER_FREQ (F_CPU/DIVISOR)
-#define SECOND TIMER_FREQ
-#define MILLISECOND (SECOND/1000)
-#define MINUTES_PER_HOUR 60
-#define SECONDS_PER_MINUTE 60
-#define MINUTE (SECONDS_PER_MINUTE*SECOND)
-#define HOUR (MINUTES_PER_HOUR*(uint64_t)MINUTE)
-#define quot64(x,y) ((uint64_t)(x)+(uint64_t)(y)/2)/(uint64_t)(y)
-
-#ifdef TICKS_PER_MINUTE
-#define TICK_PERIOD quot64(MINUTE,TICKS_PER_MINUTE)
-#else
-#define TICK_PERIOD quot64(HOUR,TICKS_PER_HOUR)
-#endif
-#define TICKS_PER_CYCLE 2
-#define CYCLE (TICKS_PER_CYCLE*TICK_PERIOD)
-#define TOLERANCE (10*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
 
 class AStar32U4PrimeLCD_remapped : public PololuHD44780Base
 {
@@ -107,8 +79,6 @@ static AStar32U4PrimeLCD_remapped lcd;
 // library.  Here we initialize it to 0000 to get the full 16 bit count, instead of just 8.
 #define WGM1 0b0000
 
-static bool display_needed = TRUE;
-
 typedef uint64_t counter_t;
 static counter_t timer;		// the timer, continuously updated
 
@@ -158,9 +128,6 @@ void setup() {
   ac_setup();			// it's important to start the comparator after timer1 is started
 }
 
-#define SKIP_TICKS 5	    // Ignoring the first event is a good idea, since it may not correspond to the
-			    // leading edge of the pendulum rod.  Ignoring one other event seems also to help.
-
 static void row(int r,const char *p) {
   char buf[20];
   sprintf(buf,"%-8s",p);	// the LCD displays 8 characters per row
@@ -170,58 +137,55 @@ static void row(int r,const char *p) {
 static void row0(const char *p) {
   row(0,p);
 }
+  
+static void row1(const char *p) {
+  row(1,p);
+}
+
+class AStar32U4PrimeButtonA buttonA; // won't work with SD card when the jumper is in use
+class AStar32U4PrimeButtonB buttonB;
+class AStar32U4PrimeButtonC buttonC;
+
+#define chipSelect 4
 
 void loop() {
-  display_needed = TRUE;
-  static uint16_t reset_counter;
+  row0("ver 4");
+  delay(600);
+  update_timer();
+  uint32_t tick_counter = 0, loop_counter = 0;
+  char buf[30];
+  bitSet(ACSR,ACI);		// clear comparator event flag initially, to ignore some possible noise
+  if (!SD.begin(chipSelect))
+  {
+    static char m[] = "SD card error";
+    row0(m), row1(m+8);
+    while(TRUE);
+  }
+  File out = SD.open("events.txt", FILE_WRITE);
+  if (!out) {
+    static char m[] = "file open failed";
+    row0(m), row1(m+8);
+    while(TRUE);
+  }
   while (TRUE) {
+    loop_counter++;
     update_timer();
-    uint32_t tick_counter = 0, cycle_counter = 0;
-    counter_t
-      cycle_sum = 0,		    // sum of the cycle timings (a cycle is two ticks, or one complete pendulum cycle)
-      last_tick_time[2] = {0,0};    // last_tick_time[0] is the previous tick time, and
-				    // last_tick_time[1] is the one before that
-    char buf[20];
-    bitSet(ACSR,ACI);		// clear comparator event flag initially, to ignore some possible noise
-    while (TRUE) {
-      update_timer();
-      if (ACSR & bit(ACI)) {
-	bitSet(ACSR,ACI);		// clear comparator event flag
-	uint16_t input_capture = ICR1;
-	update_timer();		// ensure the timer has been updated after the capture of the time of the comparator event
-	counter_t this_tick_time = ((input_capture > (uint16_t)timer // whether the timer overflowed after the capture
-				     ? ((timer >> 16) - 1)
-				     : (timer >> 16)
-				     ) << 16) | input_capture;
-	// now we know that this_tick_time <= timer, as it must be
-	if (tick_counter == 0) {
-	  tick_counter++;
-	  last_tick_time[0] = this_tick_time;
-	  display_needed = TRUE; }
-	else {
-	  counter_t this_tick_length = this_tick_time - last_tick_time[0];
-	  if (this_tick_length < 250 * MILLISECOND) continue; // allow entire pendulum rod to pass by, and ignore noisy nearby events
-	  if (tick_counter == 1) {
-	    tick_counter++;
-	    last_tick_time[1] = last_tick_time[0];
-	    last_tick_time[0] = this_tick_time;
-	    display_needed = TRUE; }
-	  else {
-	    counter_t this_cycle_length = this_tick_time - last_tick_time[1];
-	    if (this_cycle_length < CYCLE - TOLERANCE) continue; // ignore spurious events
-	    if (this_cycle_length > CYCLE + TOLERANCE) break; // restart if no tick occurs during the predicted period
-	    tick_counter++;				   // count the tick
-	    last_tick_time[1] = last_tick_time[0];
-	    last_tick_time[0] = this_tick_time;
-	    display_needed = TRUE;
-	    if (tick_counter > 2 + SKIP_TICKS) { // count the cycle
-	      cycle_counter++;
-	      cycle_sum += this_cycle_length; } } } }
-      if (display_needed) {
-	display_needed = FALSE;
-	lcd.gotoXY(0,0), sprintf(buf,"/hr%5lu",tick_counter), lcd.print(buf);
-	uint32_t tick_rate = cycle_counter > 0 ? quot64(100*HOUR*TICKS_PER_CYCLE*cycle_counter, cycle_sum) : 0;
-
-	lcd.gotoXY(0,1), sprintf(buf,"%5lu.%02lu",tick_rate/100,tick_rate%100), lcd.print(buf);
-      }}
-    reset_counter++; }}
+    if ((loop_counter & 0xff) == 0 && buttonC.getSingleDebouncedPress()) break;
+    if (ACSR & bit(ACI)) {
+      tick_counter++;
+      bitSet(ACSR,ACI);		// clear comparator event flag
+      uint16_t input_capture = ICR1;
+      update_timer();		// ensure the timer has been updated after the capture of the time of the comparator event
+      counter_t this_tick_time = ((input_capture > (uint16_t)timer // whether the timer overflowed after the capture
+				   ? ((timer >> 16) - 1)
+				   : (timer >> 16)
+				   ) << 16) | input_capture;
+      sprintf(buf,"%4lu%12lu",tick_counter,(long unsigned)this_tick_time);
+      out.println(buf);
+      lcd.gotoXY(0,0), lcd.print(buf);
+      lcd.gotoXY(0,1), lcd.print(buf+8);
+    }}
+  out.close();
+  lcd.clear();
+  row0("done");
+  while (TRUE); }
