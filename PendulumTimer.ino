@@ -1,14 +1,6 @@
 // Plug the sensor into pin A5
 
-// The pendulum swings back and forth, and we assume the sensor detects it twice per
-// cycle, so we expect the even ticks to be evenly spaced and we expect the odd ticks to
-// be evenly spaced.  Since the sensor is not in the exact center, we don't expect all
-// the ticks to be evenly spaced.
-
-// We display several parameters on the LCD, scroll to them with the B and C buttons.
-
-// My A-Star's clock seems to be slow by about 2 seconds in 20 hours.  We
-// should add code to compensate for such calibration.
+// constantly read the sensor level and write to SD, once every 2.5 ms
 
 #include <AStar32U4Prime.h>
 #include <SPI.h>
@@ -97,37 +89,6 @@ static void timer1_setup() {
   TCNT1 = 0;
 }
 
-static void adc_setup() {
-  ADMUX =			// ADC Multiplexer Selection Register
-    0;				//   ADC0 from the ADC MUX.
-  ADCSRA =			// ADC Control and Status Register A
-				//   no ADEN - ADC Enable
-    0;
-  ADCSRB =			// ADC Control and Status Register B
-    bit(ACME);	                //   Analog Comparator Multiplexer Enable, free running mode
-}
-
-static void ac_setup() {
-  ACSR =			// Analog Comparator Control and Status Register
-    bit(ACIC) |			//   Input Capture Enable
-#if USE_BANDGAP_REF
-    bit(ACBG) |			//   Analog Comparator Bandgap Select (pin 7 is in use for AIN0 to the CPU and for RS to the LCD, but RS can be remapped)
-#endif
-    bit(ACI) |			//   clear the Analog Comparator Interrupt Flag
-    bit(ACIS1);			//   Comparator Interrupt on Falling Output Edge (could be important: this way we get
-				//   the leading edge of the pendulum rod, for as the brightness increases,
-				//   the voltage decreases.  If we try to detect the trailing edge we may
-				//   occasionally be deceived by noise as the leading edge passes by.)
-}
-
-void setup() {
-  // init() in Arduino.app/Contents/Resources/Java/hardware/arduino/cores/arduino/wiring.c
-  // is called before setup() is called, to initialize all the ports
-  timer1_setup();
-  adc_setup();
-  ac_setup();			// it's important to start the comparator after timer1 is started
-}
-
 static void row(int r,const char *p) {
   char buf[20];
   sprintf(buf,"%-8s",p);	// the LCD displays 8 characters per row
@@ -142,50 +103,39 @@ static void row1(const char *p) {
   row(1,p);
 }
 
+static void exit(const char *p, const char *q) {
+  row0(p);
+  row1(q);
+  while (TRUE);
+}
+
 class AStar32U4PrimeButtonA buttonA; // won't work with SD card when the jumper is in use
 class AStar32U4PrimeButtonB buttonB;
 class AStar32U4PrimeButtonC buttonC;
 
 #define chipSelect 4
 
+void setup() { }
+
 void loop() {
-  row0("ver 4");
-  delay(600);
-  update_timer();
-  uint32_t tick_counter = 0, loop_counter = 0;
+  uint32_t loop_counter = 0;
   char buf[30];
-  bitSet(ACSR,ACI);		// clear comparator event flag initially, to ignore some possible noise
-  if (!SD.begin(chipSelect))
-  {
-    static char m[] = "SD card error";
-    row0(m), row1(m+8);
-    while(TRUE);
-  }
-  File out = SD.open("events.txt", FILE_WRITE);
-  if (!out) {
-    static char m[] = "file open failed";
-    row0(m), row1(m+8);
-    while(TRUE);
-  }
+  row0("ver 6"), delay(600);
+  timer1_setup();
+  update_timer();
+  if (!SD.begin(chipSelect)) exit("SD card","error");
+  File out = SD.open("SCOPE.TXT", FILE_WRITE);
+  if (!out) exit("openfile","failed");
   while (TRUE) {
     loop_counter++;
+    if ((loop_counter & 0x0f) == 0 && buttonC.getSingleDebouncedPress()) break;
+    uint16_t level = analogRead(A5);
     update_timer();
-    if ((loop_counter & 0xff) == 0 && buttonC.getSingleDebouncedPress()) break;
-    if (ACSR & bit(ACI)) {
-      tick_counter++;
-      bitSet(ACSR,ACI);		// clear comparator event flag
-      uint16_t input_capture = ICR1;
-      update_timer();		// ensure the timer has been updated after the capture of the time of the comparator event
-      counter_t this_tick_time = ((input_capture > (uint16_t)timer // whether the timer overflowed after the capture
-				   ? ((timer >> 16) - 1)
-				   : (timer >> 16)
-				   ) << 16) | input_capture;
-      sprintf(buf,"%4lu%12lu",tick_counter,(long unsigned)this_tick_time);
-      out.println(buf);
-      lcd.gotoXY(0,0), lcd.print(buf);
-      lcd.gotoXY(0,1), lcd.print(buf+8);
-    }}
+    sprintf(buf,"%lu,%u,%lu\n",loop_counter,level,(long unsigned)timer);
+    out.print(buf);
+    row0(buf);
+    row1(buf+8);
+  }
   out.close();
   lcd.clear();
-  row0("done");
-  while (TRUE); }
+  exit("done",""); }
