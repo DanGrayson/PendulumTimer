@@ -148,8 +148,14 @@ class AStar32U4PrimeButtonC buttonC;
 
 #define chipSelect 4
 
+#define NUMTIMES 100
+static long unsigned tick_times[NUMTIMES];
+static int numtimes,numprinted;
+
+static char VERSION[] = "ver 5";
+
 void loop() {
-  row0("ver 4");
+  row0(VERSION);
   delay(600);
   update_timer();
   uint32_t tick_counter = 0, loop_counter = 0;
@@ -167,6 +173,7 @@ void loop() {
     row0(m), row1(m+8);
     while(TRUE);
   }
+  out.println(VERSION);
   while (TRUE) {
     loop_counter++;
     update_timer();
@@ -180,12 +187,31 @@ void loop() {
 				   ? ((timer >> 16) - 1)
 				   : (timer >> 16)
 				   ) << 16) | input_capture;
-      sprintf(buf,"%4lu%12lu",tick_counter,(long unsigned)this_tick_time);
-      out.println(buf);
+      sprintf(buf,"%8lu",tick_counter);
       lcd.gotoXY(0,0), lcd.print(buf);
-      lcd.gotoXY(0,1), lcd.print(buf+8);
+      if (numtimes<NUMTIMES) {
+	tick_times[numtimes] = this_tick_time;
+	numtimes++;
+      }
+      else {	
+	sprintf(buf,"%8lu",tick_times[numprinted]);
+	out.println(buf);
+	tick_times[numprinted] = this_tick_time;
+	numprinted++;
+	if (numprinted >= NUMTIMES) numprinted = 0;
+      }
     }}
+  int i;
+  for (i=numprinted; i<numtimes; i++) {
+    sprintf(buf,"%8lu",tick_times[i]);
+    out.println(buf);
+  }
+  for (i=0; i<numprinted; i++) {
+    sprintf(buf,"%8lu",tick_times[i]);
+    out.println(buf);
+  }
   out.close();
   lcd.clear();
   row0("done");
   while (TRUE); }
+
