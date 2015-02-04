@@ -12,15 +12,15 @@
 
 #include <AStar32U4Prime.h>
 
-#define VERSION "0.2"
+#define VERSION "0.3"
 
 #define TRUE 1
 #define FALSE 0
 
 // start user configuration section
 
-// #define TICKS_PER_MINUTE 156    // my black Ansonia mantle clock
-#define TICKS_PER_MINUTE  64       // my grandfather clock (actually seems to be 3836.25 ticks per hour)
+#define TICKS_PER_HOUR 9100        // my black Ansonia mantle clock: 2 * 35/6 * 42/7 * 40/8 * 26
+// #define TICKS_PER_HOUR 3840       // my grandfather clock (actually seems to be 3836.25 ticks per hour, we have to count the teeth)
 
 #define TOLERANCE (50*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
 
@@ -50,11 +50,7 @@ static uint32_t quot32(uint32_t x,uint32_t y) {
   return (x+y/2)/y;	// rounded integer quotient
 }
 
-#ifdef TICKS_PER_MINUTE
-#define TICK_PERIOD quot64(MINUTE,TICKS_PER_MINUTE)
-#else
 #define TICK_PERIOD quot64(HOUR,TICKS_PER_HOUR)
-#endif
 #define TICKS_PER_CYCLE 2
 #define CYCLE (TICKS_PER_CYCLE*TICK_PERIOD)
 
@@ -341,7 +337,7 @@ void loop() {
 	      cycle_square_sum += square_prec(this_cycle_length); } } } }
       static uint8_t looper;
       looper++;
-      const int num_screens = 14;
+      const int num_screens = 15;
       static uint8_t current_screen = 0;
       if (looper == 11 && buttonA.getSingleDebouncedPress()) break;
       if (looper == 33 && buttonB.getSingleDebouncedPress()) current_screen = (current_screen+num_screens-1)%num_screens, display_needed = TRUE;
@@ -421,6 +417,10 @@ void loop() {
 	    lcd.gotoXY(0,1), sprintf(buf,"%5u.%02u",v/100,v%100), lcd.print(buf);
 	    break; }
 	  case 13: {
+	    row0("target");
+	    lcd.gotoXY(0,1), sprintf(buf,"%8u",TICKS_PER_HOUR), lcd.print(buf);
+	    break; }
+	  case 14: {
 	    row0("version");
 	    row1(VERSION);
 	    break; }
