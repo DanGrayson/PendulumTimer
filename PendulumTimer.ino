@@ -301,32 +301,38 @@ void loop() {
 	bitSet(ACSR,ACI);		// clear comparator event flag
 	uint16_t input_capture = ICR1;
 	update_timer();		// ensure the timer has been updated after the capture of the time of the comparator event
-	counter_t this_tick_time = ((input_capture > (uint16_t)timer // whether the timer overflowed after the capture
+	counter_t this_event_time = ((input_capture > (uint16_t)timer // whether the timer overflowed after the capture
 				     ? ((timer >> 16) - 1)
 				     : (timer >> 16)
 				     ) << 16) | input_capture;
-	// now we know that this_tick_time <= timer, as it must be
+	static counter_t last_event_time;
+	if (this_event_time < last_event_time) {
+	  row0("inverted");
+	  row1("events");
+	  while (TRUE);
+	}
+	// now we know that this_event_time <= timer, as it must be
 	if (tick_counter == 0) {
 	  max_timer_diff = 0;	// for some reason I always get a constant big timer difference, such as 16993, so ignore it
 	  tick_counter++;
-	  last_tick_time[0] = this_tick_time;
+	  last_tick_time[0] = this_event_time;
 	  display_needed = TRUE; }
 	else {
-	  counter_t this_tick_length = this_tick_time - last_tick_time[0];
+	  counter_t this_tick_length = this_event_time - last_tick_time[0];
 	  if (this_tick_length < 250 * MILLISECOND) continue; // allow entire pendulum rod to pass by, and ignore noisy nearby events
 	  if (tick_counter == 1) {
 	    tick_counter++;
 	    last_tick_time[1] = last_tick_time[0];
-	    last_tick_time[0] = this_tick_time;
+	    last_tick_time[0] = this_event_time;
 	    reset_clock();
 	    display_needed = TRUE; }
 	  else {
-	    counter_t this_cycle_length = this_tick_time - last_tick_time[1];
+	    counter_t this_cycle_length = this_event_time - last_tick_time[1];
 	    if (this_cycle_length < CYCLE - TOLERANCE) continue; // ignore spurious events
 	    if (this_cycle_length > CYCLE + TOLERANCE) break; // restart if no tick occurs during the predicted period
 	    tick_counter++;				   // count the tick
 	    last_tick_time[1] = last_tick_time[0];
-	    last_tick_time[0] = this_tick_time;
+	    last_tick_time[0] = this_event_time;
 	    display_needed = TRUE;
 	    deviation = this_cycle_length - CYCLE;
 	    if (deviation > max_deviation) max_deviation = deviation;
