@@ -19,10 +19,15 @@
 
 // start user configuration section
 
+#define TARGET_PROVIDED FALSE
+#if TARGET_PROVIDED
 #define TICKS_PER_HOUR 9100        // my black Ansonia mantle clock: 2 * 35/6 * 42/7 * 40/8 * 26
 // #define TICKS_PER_HOUR 3840       // my grandfather clock (actually seems to be 3836.25 ticks per hour, we have to count the teeth)
-
 #define TOLERANCE (50*MILLISECOND) // milliseconds; restart the count if the tolerance is not met
+#else
+#define MIN_CYCLE (700*MILLISECOND) // 100 less than 2 * 400ms
+#define MAX_CYCLE (2100*MILLISECOND) // 100 more than 2 * 1sec
+#endif
 
 #define USE_BANDGAP_REF FALSE    // use the bandgap reference (1.2V) for the comparator, instead of pin AIN0 (which requires RS to be remapped)
 #define LCD_RS_PIN 22		// remap LCD:RS to pin 22
@@ -322,15 +327,22 @@ void loop() {
 	    display_needed = TRUE; }
 	  else {
 	    counter_t this_cycle_length = this_tick_time - last_tick_time[1];
+#if TARGET_PROVIDED
 	    if (this_cycle_length < CYCLE - TOLERANCE) continue; // ignore spurious events
 	    if (this_cycle_length > CYCLE + TOLERANCE) break; // restart if no tick occurs during the predicted period
+#else
+	    if (this_cycle_length < MIN_CYCLE) continue; // ignore spurious events
+	    if (this_cycle_length > MAX_CYCLE) break; // restart if no tick occurs during the predicted period
+#endif
 	    tick_counter++;				   // count the tick
 	    last_tick_time[1] = last_tick_time[0];
 	    last_tick_time[0] = this_tick_time;
 	    display_needed = TRUE;
+#if TARGET_PROVIDED
 	    deviation = this_cycle_length - CYCLE;
 	    if (deviation > max_deviation) max_deviation = deviation;
 	    if (deviation < min_deviation) min_deviation = deviation;
+#endif
 	    if (tick_counter > 2 + SKIP_TICKS) { // count the cycle
 	      cycle_counter++;
 	      cycle_sum += this_cycle_length;
@@ -376,7 +388,11 @@ void loop() {
 	    break; }
 	  case 5: {
 	    row0("max dev");
+#if TARGET_PROVIDED
 	    lcd.gotoXY(0,1), sprintf(buf,"%+8ld",max_deviation), lcd.print(buf);
+#else
+	    row1("none");
+#endif
 	    break; }
 	  case 6: {
 	    row0("min dev");
@@ -418,7 +434,11 @@ void loop() {
 	    break; }
 	  case 13: {
 	    row0("target");
+#if TARGET_PROVIDED
 	    lcd.gotoXY(0,1), sprintf(buf,"%8u",TICKS_PER_HOUR), lcd.print(buf);
+#else
+	    row1("none");
+#endif
 	    break; }
 	  case 14: {
 	    row0("version");
